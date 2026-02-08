@@ -470,26 +470,36 @@ class LyricGame:
                 logger.info(f"用户 {user_id} 连唱匹配成功")
                 return await self._output_next(session)
             else:
-                # 匹配失败，尝试重新定位
-                logger.info(f"用户 {user_id} 连唱匹配失败，尝试重新定位")
-                session.in_song = False
+                # 匹配失败，保持在当前歌曲中，提示用户重试
+                logger.info(f"用户 {user_id} 连唱匹配失败，保持在当前歌曲中")
+                return f"不匹配，请重试！\n上一句是：{expected}\n提示：发送'退出接歌'可退出游戏"
         
         # 情况2：首次输入或重新定位
-        # 识别歌曲
-        logger.info(f"用户 {user_id} 正在识别歌曲...")
-        songs = await self.api.search_songs(user_input, limit=1)
-        if not songs or len(songs) == 0:
-            logger.info(f"未识别到歌曲，用户输入: {user_input}")
-            return None
-        
-        song_info = songs[0]
-        logger.info(f"识别到歌曲: {song_info['name']} - {song_info['artist']}")
-        
-        # 获取歌词
-        lyrics = await self.get_lyrics(song_info['id'])
-        if not lyrics:
-            logger.warning(f"未获取到歌词，歌曲ID: {song_info['id']}")
-            return None
+        # 检查是否已选择歌曲（通过/接歌词命令）
+        if session.song_id:
+            # 使用已选择的歌曲
+            logger.info(f"用户 {user_id} 使用已选择的歌曲，ID: {session.song_id}")
+            song_info = session.song_info
+            # 如果歌词还未加载，则加载歌词
+            if not session.lyrics:
+                session.lyrics = await self.get_lyrics(session.song_id)
+            lyrics = session.lyrics
+        else:
+            # 识别歌曲
+            logger.info(f"用户 {user_id} 正在识别歌曲...")
+            songs = await self.api.search_songs(user_input, limit=1)
+            if not songs or len(songs) == 0:
+                logger.info(f"未识别到歌曲，用户输入: {user_input}")
+                return None
+            
+            song_info = songs[0]
+            logger.info(f"识别到歌曲: {song_info['name']} - {song_info['artist']}")
+            
+            # 获取歌词
+            lyrics = await self.get_lyrics(song_info['id'])
+            if not lyrics:
+                logger.warning(f"未获取到歌词，歌曲ID: {song_info['id']}")
+                return None
         
         logger.info(f"获取到歌词，共 {len(lyrics)} 句")
         
@@ -500,8 +510,10 @@ class LyricGame:
             return None
         
         # 更新会话
-        session.song_id = song_info['id']
-        session.song_info = song_info
+        if not session.song_id:
+            # 只有在新搜索歌曲时才更新歌曲信息
+            session.song_id = song_info['id']
+            session.song_info = song_info
         session.lyrics = lyrics
         session.position = match_idx + 1
         session.in_song = True
