@@ -474,28 +474,28 @@ class LyricGame:
             return None
         
         # 对唱逻辑：
-        # position指向bot上次回复的歌词
-        # 用户应该输入 position+1 句
-        # 验证通过后，bot返回 position+2 句，position更新为position+2
+        # position指向用户需要输入的歌词
+        # 用户输入 position 句，验证通过后 bot 回复 position+1 句
+        # position 更新为 position+1
         
         # 检查是否还有足够的歌词
-        if session.position + 1 >= len(session.lyrics):
+        if session.position >= len(session.lyrics):
             logger.info(f"用户 {user_id} 歌曲已唱完，position={session.position}, 歌词总数={len(session.lyrics)}")
             session.in_song = False
             return "歌曲已唱完！"
         
-        # 用户应该输入的歌词（position+1句）
-        expected = session.lyrics[session.position + 1]['text']
-        logger.info(f"[DEBUG] 用户 {user_id} position={session.position}, 用户应输入第{session.position + 1}句='{expected}', user_input='{user_input}'")
+        # 用户应该输入的歌词（position句）
+        expected = session.lyrics[session.position]['text']
+        logger.info(f"[DEBUG] 用户 {user_id} position={session.position}, 用户应输入第{session.position}句='{expected}', user_input='{user_input}'")
         
         if self.is_match(user_input, expected):
-            # 匹配成功，返回 position+2 句
+            # 匹配成功，返回 position+1 句
             logger.info(f"用户 {user_id} 对唱匹配成功")
             
-            if session.position + 2 < len(session.lyrics):
-                next_line = session.lyrics[session.position + 2]['text']
+            if session.position + 1 < len(session.lyrics):
+                next_line = session.lyrics[session.position + 1]['text']
                 old_position = session.position
-                session.position += 2  # 更新position，下次用户需要输入position+3句
+                session.position += 1  # 更新position，下次用户需要输入position+1句
                 logger.info(f"[DEBUG] 用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回第{session.position}句='{next_line}'")
                 return next_line
             else:
@@ -681,18 +681,19 @@ class LyricGamePlugin(Star):
                 session.song_id = selected_song['id']
                 session.song_info = selected_song
                 session.lyrics = lyrics
-                session.position = 1  # bot回复第1句后，position指向1，用户下次需要输入第2句
+                session.position = 0  # bot给出第0句，用户需要输入第0句确认，然后bot回复第1句
                 session.in_song = True
                 
                 logger.info(f"用户 {user_id} 成功初始化歌曲会话")
                 
-                # bot先回复第1句歌词
-                if len(lyrics) > 1:
-                    first_line = lyrics[1]['text']
-                    msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n{first_line}\n提示：请接下一句歌词，匹配阈值{threshold}%')
-                    yield event.plain_result(msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.game.match_threshold))
-                else:
-                    yield event.plain_result("歌词太短，无法开始游戏")
+                # bot先给出第0句，让用户确认
+                first_line = lyrics[0]['text']
+                msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n请接歌词：{first_line}\n提示：歌词匹配阈值当前为{threshold}%，可在插件配置中调整（建议60-70）')
+                
+                # 重要：阻止后续处理器（handle_all_messages）继续处理这条消息
+                event.stop_event()
+                
+                yield event.plain_result(msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.game.match_threshold))
             else:
                 logger.warning(f"用户 {user_id} 输入无效数字: {choice}, 有效范围: 1-{len(session.song_candidates)}")
                 msg_template = self.config.get('msg_invalid_number', '请输入1-{count}之间的数字')
