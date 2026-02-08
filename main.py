@@ -613,6 +613,8 @@ class LyricGamePlugin(Star):
             session.song_candidates = songs
             self.active_sessions.add(user_id)  # 标记用户在选择歌曲状态
             
+            logger.info(f"用户 {user_id} 被添加到 active_sessions，当前活跃会话: {self.active_sessions}")
+            
             # 显示搜索结果
             result = "找到以下歌曲，请发送数字选择：\n"
             for idx, song in enumerate(songs, 1):
@@ -624,20 +626,28 @@ class LyricGamePlugin(Star):
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
             yield event.plain_result("搜索失败，请重试")
     
-    async def on_message(self, event: AstrMessageEvent):
+    @filter.on_message()
+    async def handle_all_messages(self, event: AstrMessageEvent):
         """监听所有消息，处理歌曲选择和歌词接龙"""
         user_id = event.unified_msg_origin
         
+        logger.debug(f"on_message 被调用，用户: {user_id}, active_sessions: {self.active_sessions}")
+        
         # 只处理处于活跃状态的用户（选择歌曲或接歌词）
         if user_id not in self.active_sessions:
+            logger.debug(f"用户 {user_id} 不在活跃会话中，跳过处理")
             return
         
         message = event.message_str.strip()
+        logger.debug(f"处理用户 {user_id} 的消息: '{message}'")
+        
         if not message:
+            logger.debug(f"用户 {user_id} 发送空消息，跳过处理")
             return
         
         # 处理退出命令
         if message in ['退出接歌', '结束接歌', 'quit', 'q']:
+            logger.info(f"用户 {user_id} 退出接歌词模式")
             self.active_sessions.discard(user_id)
             response = await self.game.exit_session(user_id)
             if response:
@@ -645,9 +655,11 @@ class LyricGamePlugin(Star):
             return
         
         session = self.game.get_session(user_id)
+        logger.debug(f"用户 {user_id} 会话状态: selecting_song={session.selecting_song}, candidates={len(session.song_candidates) if session.song_candidates else 0}")
         
         # 处理歌曲选择
         if session.selecting_song and session.song_candidates:
+            logger.info(f"用户 {user_id} 正在选择歌曲，输入: '{message}'")
             try:
                 # 解析用户输入的数字
                 choice = int(message)
@@ -656,6 +668,8 @@ class LyricGamePlugin(Star):
                     selected_song = session.song_candidates[choice - 1]
                     session.selecting_song = False
                     session.song_candidates = []
+                    
+                    logger.info(f"用户 {user_id} 选择歌曲: {selected_song['name']} (ID: {selected_song['id']})")
                     
                     # 获取歌词
                     lyrics = await self.game.get_lyrics(selected_song['id'])
@@ -671,7 +685,7 @@ class LyricGamePlugin(Star):
                     session.position = 0
                     session.in_song = True
                     
-                    logger.info(f"用户 {user_id} 选择歌曲: {selected_song['name']}")
+                    logger.info(f"用户 {user_id} 成功初始化歌曲，歌词数量: {len(lyrics)}")
                     yield event.plain_result(f"已选择《{selected_song['name']}》，请发送第一句歌词开始游戏！")
                 else:
                     yield event.plain_result(f"请输入1-{len(session.song_candidates)}之间的数字")
@@ -681,11 +695,15 @@ class LyricGamePlugin(Star):
         
         # 处理歌词接龙
         try:
+            logger.info(f"用户 {user_id} 正在接歌词，输入: '{message}'")
             response = await self.game.handle(user_id, message)
             
             if response:
                 # 匹配成功，发送下一句
+                logger.info(f"用户 {user_id} 接歌词成功，返回: '{response}'")
                 yield event.plain_result(response)
+            else:
+                logger.debug(f"用户 {user_id} 接歌词未匹配，保持状态")
             # 匹配失败则不回复，保持在接歌词模式
             
         except Exception as e:
