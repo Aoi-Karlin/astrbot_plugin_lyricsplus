@@ -179,6 +179,9 @@ class NeteaseAPI:
                         'time': timestamp,
                         'text': cleaned_text
                     })
+
+        # 过滤掉包含 英文冒号(:) 或 中文冒号(：) 的行
+        lyrics = [line for line in lyrics if ':' not in line['text'] and '：' not in line['text']]
         
         return lyrics
     
@@ -222,6 +225,9 @@ class NeteaseAPI:
         
         # 按时间戳排序
         lyrics.sort(key=lambda x: x['time'])
+        
+        # 过滤掉含有冒号的歌词
+        lyrics = [line for line in lyrics if ':' not in line['text'] and '：' not in line['text']]
         
         return lyrics
 
@@ -462,24 +468,39 @@ class LyricGame:
         
         session.last_time = current_time
         
-        # 情况1：正在连唱中，验证输入是否匹配预期的歌词（position-1句）
-        if session.in_song and session.position > 0 and session.position < len(session.lyrics):
-            expected = session.lyrics[session.position - 1]['text']  # 验证上一句（用户应该输入的）
+        # 情况1：正在连唱中，验证输入是否匹配预期的歌词（position句）
+        if session.in_song and session.position < len(session.lyrics):
+            expected = session.lyrics[session.position]['text']  # 验证当前句（用户应该输入的）
             
             if self.is_match(user_input, expected):
-                # 匹配成功，返回当前position句，然后position+1
+                # 匹配成功，返回下一句（position+1句），然后position+1
                 logger.info(f"用户 {user_id} 连唱匹配成功")
-                current_line = session.lyrics[session.position]['text']
-                session.position += 1  # 准备下一次
-                return current_line
+                if session.position + 1 < len(session.lyrics):
+                    next_line = session.lyrics[session.position + 1]['text']
+                    session.position += 1  # 准备下一次（用户需要输入下一句）
+                    return next_line
+                else:
+                    logger.info("歌曲已唱完")
+                    session.in_song = False
+                    return "歌曲已唱完！"
             else:
                 # 匹配失败，保持在当前位置，提示用户重试
                 similarity = self.calculate_similarity(user_input, expected)
                 logger.info(f"用户 {user_id} 连唱匹配失败，相似度: {similarity}%，保持在当前位置")
                 msg_template = self.config.get('msg_match_failed', '不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送\'退出接歌\'可退出游戏')
                 return msg_template.format(similarity=similarity, user_input=user_input, expected=expected)
+        elif session.in_song and session.position >= len(session.lyrics):
+            # 歌曲已唱完
+            logger.info("歌曲已唱完")
+            session.in_song = False
+            return "歌曲已唱完！"
         
-        # 情况2：首次输入或重新定位（不在游戏中或跳句了）
+        # 情况2：首次输入或重新定位（不在游戏中）
+        # 如果已经在游戏中，不应该到这里，应该在情况1处理
+        if session.in_song:
+            logger.warning(f"用户 {user_id} 在游戏中但进入了情况2，position={session.position}")
+            return None
+            
         # 检查是否已选择歌曲（通过/接歌词命令）
         if session.song_id:
             # 使用已选择的歌曲
@@ -517,10 +538,6 @@ class LyricGame:
         
         if match_idx == -1:
             logger.info("未找到匹配的歌词位置")
-            if session.song_id and session.in_song:
-                # 如果在游戏中但没匹配，提示用户
-                expected = session.lyrics[session.position]['text'] if session.position < len(session.lyrics) else ""
-                return f"不匹配，请重试！\n你输入: {user_input}\n正确歌词: {expected}"
             return None
         
         # 更新会话
