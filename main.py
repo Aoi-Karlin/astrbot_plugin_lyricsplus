@@ -585,23 +585,23 @@ class LyricGamePlugin(Star):
         logger.info("歌词接龙插件清理完成")
     
     @filter.command("接歌词")
-    async def handle_lyric_command(self, event: AstrMessageEvent):
+    async def handle_lyric_command(self, event: AstrMessageEvent, keyword: str = ""):
         """处理/接歌词指令，搜索歌曲并让用户选择"""
         user_id = event.unified_msg_origin
-        message = event.message_str.strip()
+        message = keyword.strip()
         
-        # 移除指令前缀
-        command_prefix = "/接歌词"
-        if message.startswith(command_prefix):
-            message = message[len(command_prefix):].strip()
+        logger.debug(f"收到指令，关键词: '{message}', 用户: {user_id}")
         
         if not message:
             yield event.plain_result("请提供歌曲名或歌词片段，例如：/接歌词 晴天")
             return
         
+        logger.info(f"搜索关键词: '{message}'")
+        
         # 搜索歌曲
         try:
             session = self.game.get_session(user_id)
+            logger.debug(f"调用API搜索，关键词: '{message}', 限制: {self.game.search_limit}")
             songs = await self.game.api.search_songs(message, limit=self.game.search_limit)
             
             if not songs:
