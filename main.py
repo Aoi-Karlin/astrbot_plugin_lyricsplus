@@ -107,7 +107,7 @@ class NeteaseAPI:
         Returns:
             歌词列表或None
         """
-        url = f"{self.base_url}/lyric/new"
+        url = f"{self.base_url}/lyric"
         params = {'id': song_id}
         
         try:
@@ -424,7 +424,7 @@ class LyricGame:
             歌词列表或None
         """
         # 从AstrBot存储读取缓存
-        cached = await self.plugin.get_data(f"lyrics_{song_id}")
+        cached = await self.plugin.get_kv_data(f"lyrics_{song_id}")
         if cached:
             logger.debug(f"从缓存读取歌词，歌曲ID: {song_id}")
             return cached
@@ -434,7 +434,7 @@ class LyricGame:
         
         if lyrics:
             # 缓存到AstrBot存储
-            await self.plugin.set_data(f"lyrics_{song_id}", lyrics)
+            await self.plugin.set_kv_data(f"lyrics_{song_id}", lyrics)
             logger.info(f"缓存歌词成功，歌曲ID: {song_id}")
         
         return lyrics
