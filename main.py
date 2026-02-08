@@ -244,6 +244,7 @@ class LyricGameSession:
         self.song_info: Optional[Dict] = None
         self.selecting_song: bool = False  # 是否正在选择歌曲
         self.song_candidates: List[Dict] = []  # 候选歌曲列表
+        self.start_lyric_keyword: Optional[str] = None  # 起始歌词关键词（用于从中间开始）
 
 
 class LyricGame:
@@ -638,6 +639,63 @@ class LyricGamePlugin(Star):
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
             yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
     
+    @filter.command("接歌词开始")
+    async def handle_lyric_start_from(self, event: AstrMessageEvent, keyword: str = ""):
+        """处理/接歌词开始指令，从指定歌词句子开始游戏
+        
+        用法：/接歌词开始 歌曲名 歌词关键词
+        例如：/接歌词开始 晴天 从前从前
+        """
+        user_id = event.unified_msg_origin
+        message = keyword.strip()
+        
+        logger.debug(f"收到开始指令，关键词: '{message}', 用户: {user_id}")
+        
+        if not message:
+            yield event.plain_result("请提供歌曲名和歌词关键词，例如：/接歌词开始 晴天 从前从前")
+            return
+        
+        # 分割歌曲名和歌词关键词（用空格分隔，第一个词是歌曲名，剩余是歌词）
+        parts = message.split(None, 1)
+        if len(parts) < 2:
+            yield event.plain_result("请同时提供歌曲名和歌词关键词，例如：/接歌词开始 晴天 从前从前")
+            return
+        
+        song_keyword = parts[0]
+        lyric_keyword = parts[1]
+        
+        logger.info(f"搜索歌曲: '{song_keyword}', 歌词关键词: '{lyric_keyword}'")
+        
+        try:
+            session = self.game.get_session(user_id)
+            
+            # 搜索歌曲
+            songs = await self.game.api.search_songs(song_keyword, limit=self.game.search_limit)
+            
+            if not songs:
+                yield event.plain_result(self.config.get('msg_no_songs_found', '未找到相关歌曲，请尝试其他关键词'))
+                return
+            
+            # 存储候选歌曲和歌词关键词
+            session.selecting_song = True
+            session.song_candidates = songs
+            session.start_lyric_keyword = lyric_keyword  # 保存歌词关键词
+            self.active_sessions.add(user_id)
+            
+            logger.info(f"用户 {user_id} 被添加到 active_sessions（开始模式），歌词关键词: {lyric_keyword}")
+            
+            # 显示搜索结果
+            prefix = self.config.get('msg_song_selection_prefix', '找到以下歌曲，请发送数字选择：')
+            result = prefix + "\n"
+            for idx, song in enumerate(songs, 1):
+                result += f"{idx}. {song['name']} - {song['artist']}\n"
+            
+            yield event.plain_result(result.strip())
+            
+        except Exception as e:
+            logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
+            yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
+    
     @filter.regex(r"^\d+$", priority=1000)
     async def handle_number_selection(self, event: AstrMessageEvent):
         """专门处理数字选择，高优先级"""
@@ -685,24 +743,64 @@ class LyricGamePlugin(Star):
                 
                 logger.info(f"用户 {user_id} 成功获取歌词，数量: {len(lyrics)}")
                 
+                # 检查是否需要从指定歌词开始
+                start_position = 0
+                start_lyric_keyword = session.start_lyric_keyword
+                
+                if start_lyric_keyword:
+                    # 搜索匹配的歌词位置
+                    logger.info(f"用户 {user_id} 尝试从歌词 '{start_lyric_keyword}' 开始")
+                    found_position = -1
+                    
+                    for idx, lyric in enumerate(lyrics):
+                        if self.game.is_match(start_lyric_keyword, lyric['text']):
+                            found_position = idx
+                            logger.info(f"找到匹配歌词，位置: {idx}, 歌词: {lyric['text']}")
+                            break
+                    
+                    if found_position == -1:
+                        # 未找到匹配的歌词
+                        logger.warning(f"用户 {user_id} 未找到匹配歌词: {start_lyric_keyword}")
+                        session.start_lyric_keyword = None  # 清除关键词
+                        msg_template = self.config.get('msg_line_not_found', '未在《{song_name}》中找到歌词：{keyword}\n请尝试其他关键词或使用/接歌词选择从第一句开始')
+                        yield event.plain_result(msg_template.format(song_name=selected_song['name'], keyword=start_lyric_keyword))
+                        self.active_sessions.discard(user_id)
+                        return
+                    
+                    start_position = found_position
+                    session.start_lyric_keyword = None  # 清除关键词
+                
                 # 初始化会话
                 session.song_id = selected_song['id']
                 session.song_info = selected_song
                 session.lyrics = lyrics
-                session.position = 0  # bot给出第0句，用户需要输入第0句确认，然后bot回复第1句
+                session.position = start_position  # 从指定位置开始
                 session.in_song = True
                 session.last_time = time.time()  # 设置当前时间，避免超时检查误判
                 
-                logger.info(f"用户 {user_id} 成功初始化歌曲会话")
+                logger.info(f"用户 {user_id} 成功初始化歌曲会话，起始位置: {start_position}")
                 
-                # bot先给出第0句，让用户确认
-                first_line = lyrics[0]['text']
-                msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n请接歌词：{first_line}\n提示：歌词匹配阈值当前为{threshold}%，可在插件配置中调整（建议60-70）')
+                # bot先给出起始句，让用户确认
+                first_line = lyrics[start_position]['text']
+                
+                if start_position > 0:
+                    # 从中间开始，使用特殊提示
+                    msg_template = self.config.get('msg_start_from_line', '已选择《{song_name}》\n从第{line_number}句开始：{first_line}\n提示：歌词匹配阈值当前为{threshold}%')
+                    message = msg_template.format(
+                        song_name=selected_song['name'], 
+                        line_number=start_position + 1,
+                        first_line=first_line, 
+                        threshold=self.game.match_threshold
+                    )
+                else:
+                    # 从头开始，使用默认提示
+                    msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n请接歌词：{first_line}\n提示：歌词匹配阈值当前为{threshold}%，可在插件配置中调整（建议60-70）')
+                    message = msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.game.match_threshold)
                 
                 # 重要：阻止后续处理器（handle_all_messages）继续处理这条消息
                 event.stop_event()
                 
-                yield event.plain_result(msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.game.match_threshold))
+                yield event.plain_result(message)
             else:
                 logger.warning(f"用户 {user_id} 输入无效数字: {choice}, 有效范围: 1-{len(session.song_candidates)}")
                 msg_template = self.config.get('msg_invalid_number', '请输入1-{count}之间的数字')

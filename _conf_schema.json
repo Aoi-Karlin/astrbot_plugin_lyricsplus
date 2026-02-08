@@ -99,5 +99,17 @@
     "type": "string",
     "default": "{last_line}\n\n🎉 歌曲已唱完！",
     "hint": "bot回复最后一句歌词时显示，{last_line}会被替换为最后一句歌词"
+  },
+  "msg_start_from_line": {
+    "description": "提示：从指定歌词开始",
+    "type": "string",
+    "default": "已选择《{song_name}》\n从第{line_number}句开始：{first_line}\n提示：歌词匹配阈值当前为{threshold}%",
+    "hint": "使用/接歌词开始 关键词时显示，{song_name}、{line_number}、{first_line}、{threshold}会被替换为实际值"
+  },
+  "msg_line_not_found": {
+    "description": "提示：未找到指定歌词",
+    "type": "string",
+    "default": "未在《{song_name}》中找到歌词：{keyword}\n请尝试其他关键词或使用/接歌词选择从第一句开始",
+    "hint": "搜索不到指定歌词时显示，{song_name}、{keyword}会被替换为实际值"
   }
 }
