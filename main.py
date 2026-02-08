@@ -471,15 +471,14 @@ class LyricGame:
         # 情况1：正在连唱中，验证输入是否匹配预期的歌词（position句）
         if session.in_song and session.position < len(session.lyrics):
             expected = session.lyrics[session.position]['text']  # 验证当前句（用户应该输入的）
-            logger.debug(f"情况1: position={session.position}, expected={expected}")
             
             if self.is_match(user_input, expected):
-                # 匹配成功，返回下一句（position+1句），然后position+1
+                # 匹配成功，返回下下一句（position+2句），然后position+2
                 logger.info(f"用户 {user_id} 连唱匹配成功")
-                if session.position + 1 < len(session.lyrics):
-                    next_line = session.lyrics[session.position + 1]['text']
-                    session.position += 1  # 准备下一次（用户需要输入下一句）
-                    logger.debug(f"情况1匹配成功: 返回下一句, position更新为{session.position}")
+                if session.position + 2 < len(session.lyrics):
+                    next_line = session.lyrics[session.position + 2]['text']
+                    session.position += 2  # 准备下一次（用户需要输入下下句）
+                    logger.info(f"用户 {user_id} 验证通过，position更新为{session.position}")
                     return next_line
                 else:
                     logger.info("歌曲已唱完")
@@ -489,7 +488,6 @@ class LyricGame:
                 # 匹配失败，保持在当前位置，提示用户重试
                 similarity = self.calculate_similarity(user_input, expected)
                 logger.info(f"用户 {user_id} 连唱匹配失败，相似度: {similarity}%，保持在当前位置")
-                logger.debug(f"情况1匹配失败: position={session.position}, expected={expected}, user_input={user_input}")
                 msg_template = self.config.get('msg_match_failed', '不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送\'退出接歌\'可退出游戏')
                 return msg_template.format(similarity=similarity, user_input=user_input, expected=expected)
         elif session.in_song and session.position >= len(session.lyrics):
@@ -497,71 +495,15 @@ class LyricGame:
             logger.info("歌曲已唱完")
             session.in_song = False
             return "歌曲已唱完！"
-        
-        # 情况2：首次输入或重新定位（不在游戏中）
-        # 如果已经在游戏中，不应该到这里，应该在情况1处理
-        if session.in_song:
-            logger.warning(f"用户 {user_id} 在游戏中但进入了情况2，position={session.position}")
-            return None
-            
-        # 检查是否已选择歌曲（通过/接歌词命令）
-        if session.song_id:
-            # 使用已选择的歌曲
-            logger.info(f"用户 {user_id} 使用已选择的歌曲，ID: {session.song_id}")
-            song_info = session.song_info
-            # 如果歌词还未加载，则加载歌词
-            if not session.lyrics:
-                session.lyrics = await self.get_lyrics(session.song_id)
-            lyrics = session.lyrics
-        else:
-            # 识别歌曲
-            logger.info(f"用户 {user_id} 正在识别歌曲...")
-            songs = await self.api.search_songs(user_input, limit=1)
-            if not songs or len(songs) == 0:
-                logger.info(f"未识别到歌曲，用户输入: {user_input}")
-                return None
-            
-            song_info = songs[0]
-            logger.info(f"识别到歌曲: {song_info['name']} - {song_info['artist']}")
-            
-            # 获取歌词
-            lyrics = await self.get_lyrics(song_info['id'])
-            if not lyrics:
-                logger.warning(f"未获取到歌词，歌曲ID: {song_info['id']}")
-                return None
-        
-        logger.info(f"获取到歌词，共 {len(lyrics)} 句")
-        
-        # 在歌词中查找用户输入的位置（支持跳句）
-        match_idx = -1
-        for i in range(len(lyrics)):
-            if self.is_match(user_input, lyrics[i]['text']):
-                match_idx = i
-                logger.debug(f"情况2: 匹配到第{i}句: {lyrics[i]['text']}")
-                break
-        
-        if match_idx == -1:
-            logger.info("未找到匹配的歌词位置")
-            return None
-        
-        # 更新会话
-        if not session.song_id:
-            # 只有在新搜索歌曲时才更新歌曲信息
-            session.song_id = song_info['id']
-            session.song_info = song_info
-        session.lyrics = lyrics
-        session.position = match_idx + 1  # 指向匹配歌词的下一句（用户下次需要输入的）
-        session.in_song = True
-        
-        logger.info(f"定位成功，位置: {match_idx}，返回下一句, position设置为{session.position}")
-        
-        # 返回匹配歌词的下一句
-        if match_idx + 1 < len(lyrics):
-            return lyrics[match_idx + 1]['text']
-        else:
+        elif session.in_song and session.position >= len(session.lyrics):
+            # 歌曲已唱完
             logger.info("歌曲已唱完")
             session.in_song = False
-            return None
+            return "歌曲已唱完！"
+        
+        # 情况2：不在游戏中，不处理
+        logger.debug(f"用户 {user_id} 不在游戏中，position={session.position if hasattr(session, 'position') else 'N/A'}")
+        return None
     
     async def _output_next(self, session: LyricGameSession) -> Optional[str]:
         """
@@ -733,13 +675,13 @@ class LyricGamePlugin(Star):
                 session.song_id = selected_song['id']
                 session.song_info = selected_song
                 session.lyrics = lyrics
-                session.position = 1  # 指向第二句（用户需要输入的歌词）
+                session.position = 0  # 指向第0句（用户需要输入的歌词）
                 session.in_song = True
                 
                 logger.info(f"用户 {user_id} 成功初始化歌曲会话")
-                # 显示第一句歌词，让用户接第二句
+                # 显示第一句歌词，让用户接
                 first_line = lyrics[0]['text'] if lyrics else "暂无歌词"
-                msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n请接歌词：{first_line}\n提示：歌词匹配阈值当前为{threshold}%，可在插件配置中调整（建议60-70）')
+                msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n请接歌词：{first_line}\n提示：跳过1句模式，输入后返回下下句')
                 yield event.plain_result(msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.game.match_threshold))
             else:
                 logger.warning(f"用户 {user_id} 输入无效数字: {choice}, 有效范围: 1-{len(session.song_candidates)}")
