@@ -1,0 +1,23 @@
+{
+  "netease_api": {
+    "description": "网易云音乐API地址（NeteaseCloudMusicApi服务地址）",
+    "type": "string",
+    "default": "http://localhost:3000",
+    "hint": "需要部署NeteaseCloudMusicApi服务，详见项目文档"
+  },
+  "session_timeout": {
+    "description": "会话超时时间（秒），无活动后自动重置",
+    "type": "int",
+    "default": 60,
+    "min": 10,
+    "max": 3600
+  },
+  "match_threshold": {
+    "description": "模糊匹配阈值（0-100），数值越高匹配越严格",
+    "type": "int",
+    "default": 75,
+    "min": 50,
+    "max": 100,
+    "hint": "建议值：60-80，数字越大越严格"
+  }
+}

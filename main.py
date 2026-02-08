@@ -1,24 +1,608 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+"""
+AstrBot 歌词接龙插件
+用户发送一句歌词，bot自动回复下一句，营造无缝对唱体验
+"""
 
-@register("helloworld", "YourName", "一个简单的 Hello World 插件", "1.0.0")
-class MyPlugin(Star):
+import aiohttp
+import logging
+import re
+import time
+from typing import Optional, Dict, List
+from pathlib import Path
+from astrbot.api.star import Star, register, Context
+from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+
+logger = logging.getLogger(__name__)
+
+
+class NeteaseAPI:
+    """网易云音乐API封装"""
+    
+    def __init__(self, base_url: str = "http://localhost:3000"):
+        self.base_url = base_url.rstrip('/')
+    
+    async def search_song(self, lyric_snippet: str, limit: int = 5) -> Optional[Dict]:
+        """
+        根据歌词片段搜索歌曲
+        
+        Args:
+            lyric_snippet: 歌词片段
+            limit: 返回结果数量
+            
+        Returns:
+            歌曲信息字典或None
+        """
+        url = f"{self.base_url}/cloudsearch"
+        params = {
+            'keywords': lyric_snippet,
+            'type': 1,  # 搜索单曲
+            'limit': limit
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=10) as resp:
+                    if resp.status != 200:
+                        logger.error(f"搜索API返回错误状态码: {resp.status}")
+                        return None
+                    
+                    data = await resp.json()
+                    
+                    if data.get('code') == 200 and data.get('result', {}).get('songs'):
+                        song = data['result']['songs'][0]
+                        return {
+                            'id': str(song['id']),
+                            'name': song['name'],
+                            'artist': song['ar'][0]['name'] if song.get('ar') and len(song['ar']) > 0 else '未知歌手',
+                            'album': song['al']['name'] if song.get('al') else '未知专辑'
+                        }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
+            return None
+    
+    async def get_lyrics(self, song_id: str) -> Optional[List[Dict]]:
+        """
+        获取歌曲歌词
+        
+        Args:
+            song_id: 歌曲ID
+            
+        Returns:
+            歌词列表或None
+        """
+        url = f"{self.base_url}/lyric/new"
+        params = {'id': song_id}
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=10) as resp:
+                    if resp.status != 200:
+                        logger.error(f"歌词API返回错误状态码: {resp.status}")
+                        return None
+                    
+                    data = await resp.json()
+                    
+                    if data.get('code') != 200:
+                        logger.warning(f"获取歌词失败，歌曲ID: {song_id}")
+                        return None
+                    
+                    # 优先使用逐字歌词 yrc
+                    if data.get('yrc', {}).get('lyric'):
+                        return self._parse_yrc_lyrics(data['yrc']['lyric'])
+                    
+                    # 降级使用普通歌词 lrc
+                    if data.get('lrc', {}).get('lyric'):
+                        return self._parse_lrc_lyrics(data['lrc']['lyric'])
+                    
+                    logger.warning(f"未找到歌词内容，歌曲ID: {song_id}")
+                    return None
+        
+        except Exception as e:
+            logger.error(f"获取歌词时出错: {e}", exc_info=True)
+            return None
+    
+    def _parse_yrc_lyrics(self, yrc_content: str) -> List[Dict]:
+        """
+        解析YRC逐字歌词格式
+        
+        格式: [16210,3460](16210,670,0)还(16880,410,0)没...
+        - [开始时间,总时长](时间,时长,0)字(...)
+        
+        Args:
+            yrc_content: YRC歌词内容
+            
+        Returns:
+            解析后的歌词列表
+        """
+        lyrics = []
+        
+        if not yrc_content:
+            return lyrics
+        
+        lines = yrc_content.strip().split('\n')
+        
+        for line in lines:
+            # 跳过元数据行（JSON格式）
+            if line.startswith('{'):
+                continue
+            
+            # 提取时间戳和歌词文本
+            match = re.match(r'\[(\d+),\d+\](.+)', line)
+            if match:
+                timestamp = int(match.group(1))
+                
+                # 提取纯文本（去除时间标记）
+                text_part = match.group(2)
+                # 移除所有(时间,时长,0)标记
+                text = re.sub(r'\(\d+,\d+,\d+\)', '', text_part)
+                
+                cleaned_text = text.strip()
+                if cleaned_text:
+                    lyrics.append({
+                        'time': timestamp,
+                        'text': cleaned_text
+                    })
+        
+        return lyrics
+    
+    def _parse_lrc_lyrics(self, lrc_content: str) -> List[Dict]:
+        """
+        解析LRC普通歌词格式
+        
+        格式: [00:16.21]还没好好的感受
+        
+        Args:
+            lrc_content: LRC歌词内容
+            
+        Returns:
+            解析后的歌词列表
+        """
+        lyrics = []
+        
+        if not lrc_content:
+            return lyrics
+        
+        lines = lrc_content.strip().split('\n')
+        
+        for line in lines:
+            # 匹配 [mm:ss.xx]歌词 或 [mm:ss.xxx]歌词
+            matches = re.findall(r'\[(\d+):(\d+)\.(\d+)\]([^\[]+)', line)
+            
+            for match in matches:
+                minutes = int(match[0])
+                seconds = int(match[1])
+                # 处理毫秒（可能是2位或3位）
+                ms_str = match[2]
+                milliseconds = int(ms_str) * (10 if len(ms_str) == 2 else 1)
+                text = match[3].strip()
+                
+                if text:
+                    timestamp = (minutes * 60 + seconds) * 1000 + milliseconds
+                    lyrics.append({
+                        'time': timestamp,
+                        'text': text
+                    })
+        
+        # 按时间戳排序
+        lyrics.sort(key=lambda x: x['time'])
+        
+        return lyrics
+
+
+class LyricGameSession:
+    """歌词游戏会话"""
+    
+    def __init__(self):
+        self.song_id: Optional[str] = None
+        self.lyrics: List[Dict] = []
+        self.position: int = 0
+        self.in_song: bool = False
+        self.last_time: float = 0.0
+        self.song_info: Optional[Dict] = None
+
+
+class LyricGame:
+    """歌词接龙游戏核心逻辑"""
+    
+    def __init__(self, netease_api: str, plugin_name: str, session_timeout: int = 60, match_threshold: int = 75):
+        self.api = NeteaseAPI(netease_api)
+        self.sessions: Dict[str, LyricGameSession] = {}
+        self.session_timeout = session_timeout
+        self.match_threshold = match_threshold
+        
+        # 使用标准插件数据目录
+        plugin_data_path = get_astrbot_data_path() / "plugin_data" / plugin_name
+        self.cache_dir = str(plugin_data_path)
+        
+        # 创建缓存目录
+        plugin_data_path.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"歌词接龙游戏初始化完成，会话超时: {session_timeout}秒，匹配阈值: {match_threshold}，缓存目录: {self.cache_dir}")
+    
+    def get_session(self, user_id: str) -> LyricGameSession:
+        """获取用户会话"""
+        if user_id not in self.sessions:
+            self.sessions[user_id] = LyricGameSession()
+        return self.sessions[user_id]
+    
+    def clean_text(self, text: str) -> str:
+        """
+        清理文本：去除标点、空格，转小写
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            清理后的文本
+        """
+        if not text:
+            return ""
+        
+        # 去除标点符号
+        text = re.sub(r'[^\w\s\u4e00-\u9fff]', '', text)
+        # 去除所有空白字符
+        text = re.sub(r'\s+', '', text)
+        # 转小写
+        return text.lower()
+    
+    def calculate_similarity(self, text1: str, text2: str) -> int:
+        """
+        计算两个文本的相似度分数
+        
+        Args:
+            text1: 第一个文本
+            text2: 第二个文本
+            
+        Returns:
+            相似度分数 (0-100)
+        """
+        if not text1 or not text2:
+            return 0
+        
+        # 清理文本
+        clean1 = self.clean_text(text1)
+        clean2 = self.clean_text(text2)
+        
+        if not clean1 or not clean2:
+            return 0
+        
+        # 精确匹配
+        if clean1 == clean2:
+            return 100
+        
+        # 包含匹配
+        if clean1 in clean2 or clean2 in clean1:
+            return 90
+        
+        # 计算编辑距离相似度
+        max_len = max(len(clean1), len(clean2))
+        if max_len == 0:
+            return 0
+        
+        # 计算Levenshtein距离
+        distance = self._levenshtein_distance(clean1, clean2)
+        similarity = int((1 - distance / max_len) * 100)
+        
+        return max(0, similarity)
+    
+    def _levenshtein_distance(self, s1: str, s2: str) -> int:
+        """
+        计算Levenshtein编辑距离
+        
+        Args:
+            s1: 第一个字符串
+            s2: 第二个字符串
+            
+        Returns:
+            编辑距离
+        """
+        if len(s1) < len(s2):
+            return self._levenshtein_distance(s2, s1)
+        
+        if len(s2) == 0:
+            return len(s1)
+        
+        previous_row = range(len(s2) + 1)
+        
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                
+                current_row.append(min(insertions, deletions, substitutions))
+            
+            previous_row = current_row
+        
+        return previous_row[-1]
+    
+    def is_match(self, user_input: str, expected: str) -> bool:
+        """
+        判断用户输入是否匹配预期歌词
+        
+        Args:
+            user_input: 用户输入
+            expected: 预期歌词
+            
+        Returns:
+            是否匹配
+        """
+        similarity = self.calculate_similarity(user_input, expected)
+        return similarity >= self.match_threshold
+    
+    async def find_position(self, user_input: str, lyrics: List[Dict], session: LyricGameSession) -> int:
+        """
+        智能定位：支持跳句和重复歌词
+        
+        Args:
+            user_input: 用户输入
+            lyrics: 歌词列表
+            session: 当前会话
+            
+        Returns:
+            匹配的歌词索引，-1表示未找到
+        """
+        if not lyrics:
+            return -1
+        
+        # 策略1：检查下一句（如果正在连唱中）
+        if session.in_song and session.position < len(lyrics):
+            if self.is_match(user_input, lyrics[session.position]['text']):
+                logger.debug(f"匹配到下一句，位置: {session.position}")
+                return session.position
+        
+        # 策略2：检查下下句（用户可能跳了一句）
+        if session.in_song and session.position + 1 < len(lyrics):
+            if self.is_match(user_input, lyrics[session.position + 1]['text']):
+                logger.debug(f"匹配到下下句，位置: {session.position + 1}")
+                return session.position + 1
+        
+        # 策略3：附近范围搜索
+        if session.in_song:
+            start = max(0, session.position - 3)
+            end = min(len(lyrics), session.position + 10)
+            
+            for i in range(start, end):
+                if self.is_match(user_input, lyrics[i]['text']):
+                    logger.debug(f"匹配到附近歌词，位置: {i}")
+                    return i
+        
+        # 策略4：全局搜索
+        for i in range(len(lyrics)):
+            if self.is_match(user_input, lyrics[i]['text']):
+                logger.debug(f"匹配到全局歌词，位置: {i}")
+                return i
+        
+        logger.debug("未找到匹配的歌词")
+        return -1
+    
+    async def get_lyrics(self, song_id: str) -> Optional[List[Dict]]:
+        """
+        获取歌词，优先从缓存读取
+        
+        Args:
+            song_id: 歌曲ID
+            
+        Returns:
+            歌词列表或None
+        """
+        # 从AstrBot存储读取缓存
+        cached = await star.get_data(f"lyrics_{song_id}")
+        if cached:
+            logger.debug(f"从缓存读取歌词，歌曲ID: {song_id}")
+            return cached
+        
+        # 调用API获取
+        lyrics = await self.api.get_lyrics(song_id)
+        
+        if lyrics:
+            # 缓存到AstrBot存储
+            await star.set_data(f"lyrics_{song_id}", lyrics)
+            logger.info(f"缓存歌词成功，歌曲ID: {song_id}")
+        
+        return lyrics
+    
+    async def handle(self, user_id: str, user_input: str) -> Optional[str]:
+        """
+        主处理函数：用户一句，返回下一句
+        
+        Args:
+            user_id: 用户ID
+            user_input: 用户输入
+            
+        Returns:
+            下一句歌词或None
+        """
+        session = self.get_session(user_id)
+        current_time = time.time()
+        
+        # 超时重置
+        if current_time - session.last_time > self.session_timeout:
+            if session.in_song:
+                logger.info(f"用户 {user_id} 会话超时，重置连唱状态")
+                session.in_song = False
+        
+        session.last_time = current_time
+        
+        # 情况1：正在连唱中，验证输入是否匹配预期的上一句
+        if session.in_song and session.position > 0:
+            expected = session.lyrics[session.position - 1]['text']
+            
+            if self.is_match(user_input, expected):
+                # 匹配成功，返回下一句
+                logger.info(f"用户 {user_id} 连唱匹配成功")
+                return await self._output_next(session)
+            else:
+                # 匹配失败，尝试重新定位
+                logger.info(f"用户 {user_id} 连唱匹配失败，尝试重新定位")
+                session.in_song = False
+        
+        # 情况2：首次输入或重新定位
+        # 识别歌曲
+        logger.info(f"用户 {user_id} 正在识别歌曲...")
+        song_info = await self.api.search_song(user_input)
+        if not song_info:
+            logger.info(f"未识别到歌曲，用户输入: {user_input}")
+            return None
+        
+        logger.info(f"识别到歌曲: {song_info['name']} - {song_info['artist']}")
+        
+        # 获取歌词
+        lyrics = await self.get_lyrics(song_info['id'])
+        if not lyrics:
+            logger.warning(f"未获取到歌词，歌曲ID: {song_info['id']}")
+            return None
+        
+        logger.info(f"获取到歌词，共 {len(lyrics)} 句")
+        
+        # 定位位置
+        match_idx = await self.find_position(user_input, lyrics, session)
+        if match_idx == -1:
+            logger.info("未找到匹配的歌词位置")
+            return None
+        
+        # 更新会话
+        session.song_id = song_info['id']
+        session.song_info = song_info
+        session.lyrics = lyrics
+        session.position = match_idx + 1
+        session.in_song = True
+        
+        logger.info(f"定位成功，位置: {match_idx}，返回下一句")
+        
+        # 返回下一句
+        return await self._output_next(session)
+    
+    async def _output_next(self, session: LyricGameSession) -> Optional[str]:
+        """
+        输出下一句歌词
+        
+        Args:
+            session: 游戏会话
+            
+        Returns:
+            下一句歌词或None
+        """
+        if session.position >= len(session.lyrics):
+            # 唱完了
+            logger.info("歌曲已唱完，结束连唱")
+            session.in_song = False
+            return None
+        
+        next_line = session.lyrics[session.position]['text']
+        session.position += 1
+        
+        return next_line
+    
+    async def exit_session(self, user_id: str) -> Optional[str]:
+        """
+        退出游戏会话
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            退出消息或None
+        """
+        if user_id in self.sessions:
+            del self.sessions[user_id]
+            logger.info(f"用户 {user_id} 已退出游戏")
+            return "已退出连唱模式"
+        
+        return None
+
+
+@register("lyric_game", "歌词接龙游戏", "1.0.0", "AstrBot")
+class LyricGamePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-
-    async def initialize(self):
-        """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
-
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        """这是一个 hello world 指令""" # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 用户发的纯文本消息字符串
-        message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!") # 发送一条纯文本消息
-
-    async def terminate(self):
-        """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
+        self.game = None
+        self.active_sessions = set()  # 记录正在接歌词的用户
+        
+    async def on_init(self, config: dict):
+        """插件初始化"""
+        logger.info("歌词接龙插件初始化...")
+        
+        self.game = LyricGame(
+            netease_api=config.get('netease_api', 'http://localhost:3000'),
+            plugin_name=self.name,
+            session_timeout=config.get('session_timeout', 60),
+            match_threshold=config.get('match_threshold', 75)
+        )
+        
+        logger.info("歌词接龙插件初始化完成")
+    
+    @filter.command("lyric")
+    async def handle_lyric_command(self, event: AstrMessageEvent):
+        """处理/lyric指令，进入接歌词模式"""
+        user_id = event.unified_msg_origin
+        message = event.message_str.strip()
+        
+        # 移除指令前缀
+        command_prefix = "/lyric"
+        if message.startswith(command_prefix):
+            message = message[len(command_prefix):].strip()
+        
+        # 标记用户进入接歌词模式
+        self.active_sessions.add(user_id)
+        logger.info(f"用户 {user_id} 进入接歌词模式")
+        
+        if not message:
+            yield event.plain_result("已进入接歌词模式，请发送歌词开始游戏！")
+            return
+        
+        # 尝试接歌
+        try:
+            response = await self.game.handle(user_id, message)
+            
+            if response:
+                # 匹配成功，发送下一句
+                yield event.plain_result(response)
+            else:
+                # 匹配失败，提示用户
+                yield event.plain_result("未识别到歌曲，请尝试其他歌词或检查API服务")
+            
+        except Exception as e:
+            logger.error(f"处理歌词接龙时出错: {e}", exc_info=True)
+            yield event.plain_result("处理失败，请重试")
+            self.active_sessions.discard(user_id)
+    
+    async def on_message(self, event: AstrMessageEvent):
+        """监听所有消息，处理处于接歌词模式的用户"""
+        user_id = event.unified_msg_origin
+        
+        # 只处理处于接歌词模式的用户
+        if user_id not in self.active_sessions:
+            return
+        
+        message = event.message_str.strip()
+        if not message:
+            return
+        
+        # 处理退出命令
+        if message in ['退出接歌', '结束接歌', 'quit', 'q']:
+            self.active_sessions.discard(user_id)
+            response = await self.game.exit_session(user_id)
+            if response:
+                yield event.plain_result(response)
+            return
+        
+        # 尝试接歌
+        try:
+            response = await self.game.handle(user_id, message)
+            
+            if response:
+                # 匹配成功，发送下一句
+                yield event.plain_result(response)
+            # 匹配失败则不回复，保持在接歌词模式
+            
+        except Exception as e:
+            logger.error(f"处理歌词接龙时出错: {e}", exc_info=True)
+            # 发生错误时退出接歌词模式
+            self.active_sessions.discard(user_id)
