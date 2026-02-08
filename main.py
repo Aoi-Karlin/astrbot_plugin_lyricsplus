@@ -242,19 +242,13 @@ class LyricGameSession:
 class LyricGame:
     """歌词接龙游戏核心逻辑"""
     
-    def __init__(self, netease_api: str, plugin_name: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5):
+    def __init__(self, netease_api: str, cache_dir: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5):
         self.api = NeteaseAPI(netease_api)
         self.sessions: Dict[str, LyricGameSession] = {}
         self.session_timeout = session_timeout
         self.match_threshold = match_threshold
         self.search_limit = search_limit
-        
-        # 使用标准插件数据目录
-        plugin_data_path = get_astrbot_data_path() / "plugin_data" / plugin_name
-        self.cache_dir = str(plugin_data_path)
-        
-        # 创建缓存目录
-        plugin_data_path.mkdir(parents=True, exist_ok=True)
+        self.cache_dir = cache_dir
         
         logger.info(f"歌词接龙游戏初始化完成，会话超时: {session_timeout}秒，匹配阈值: {match_threshold}，搜索数量: {search_limit}，缓存目录: {self.cache_dir}")
     
@@ -565,15 +559,23 @@ class LyricGamePlugin(Star):
         """插件初始化"""
         logger.info("歌词接龙插件初始化...")
         
+        # 使用标准插件数据目录
+        data_path = Path(get_astrbot_data_path())
+        plugin_data_path = data_path / "plugin_data" / self.name
+        cache_dir = str(plugin_data_path)
+        
+        # 创建缓存目录
+        plugin_data_path.mkdir(parents=True, exist_ok=True)
+        
         self.game = LyricGame(
             netease_api=self.config.get('netease_api', 'http://localhost:3000'),
-            plugin_name=self.name,
+            cache_dir=cache_dir,
             session_timeout=self.config.get('session_timeout', 60),
             match_threshold=self.config.get('match_threshold', 75),
             search_limit=self.config.get('search_limit', 5)
         )
         
-        logger.info("歌词接龙插件初始化完成")
+        logger.info(f"歌词接龙插件初始化完成，插件名称: {self.name}，缓存目录: {cache_dir}")
     
     async def terminate(self):
         """插件清理"""
