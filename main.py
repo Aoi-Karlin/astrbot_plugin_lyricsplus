@@ -627,7 +627,7 @@ class LyricGamePlugin(Star):
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
             yield event.plain_result("搜索失败，请重试")
     
-    @star.on_message()
+    @filter.regex(r".*", priority=1)
     async def handle_all_messages(self, event: AstrMessageEvent):
         """监听所有消息，处理歌曲选择和歌词接龙"""
         user_id = event.unified_msg_origin
