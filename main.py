@@ -22,20 +22,20 @@ class NeteaseAPI:
     def __init__(self, base_url: str = "http://localhost:3000"):
         self.base_url = base_url.rstrip('/')
     
-    async def search_song(self, lyric_snippet: str, limit: int = 5) -> Optional[Dict]:
+    async def search_songs(self, keyword: str, limit: int = 5) -> Optional[List[Dict]]:
         """
-        根据歌词片段搜索歌曲
+        根据关键词搜索多个歌曲结果
         
         Args:
-            lyric_snippet: 歌词片段
+            keyword: 搜索关键词（歌名或歌词片段）
             limit: 返回结果数量
             
         Returns:
-            歌曲信息字典或None
+            歌曲信息列表或None
         """
         url = f"{self.base_url}/cloudsearch"
         params = {
-            'keywords': lyric_snippet,
+            'keywords': keyword,
             'type': 1,  # 搜索单曲
             'limit': limit
         }
@@ -49,17 +49,49 @@ class NeteaseAPI:
                     
                     data = await resp.json()
                     
+                    logger.debug(f"搜索API返回数据: {data}")
+                    
                     if data.get('code') == 200 and data.get('result', {}).get('songs'):
-                        song = data['result']['songs'][0]
-                        return {
-                            'id': str(song['id']),
-                            'name': song['name'],
-                            'artist': song['ar'][0]['name'] if song.get('ar') and len(song['ar']) > 0 else '未知歌手',
-                            'album': song['al']['name'] if song.get('al') else '未知专辑'
-                        }
+                        songs = data['result']['songs']
+                        results = []
+                        for idx, song in enumerate(songs):
+                            try:
+                                # 安全地提取歌曲信息
+                                song_id = str(song.get('id', ''))
+                                song_name = song.get('name', '未知歌曲')
+                                
+                                # 提取歌手信息
+                                artists = song.get('ar', [])
+                                artist_name = '未知歌手'
+                                if artists and len(artists) > 0:
+                                    artist_name = artists[0].get('name', '未知歌手')
+                                
+                                # 提取专辑信息
+                                album = song.get('al', {})
+                                album_name = album.get('name', '未知专辑') if album else '未知专辑'
+                                
+                                results.append({
+                                    'id': song_id,
+                                    'name': song_name,
+                                    'artist': artist_name,
+                                    'album': album_name
+                                })
+                                logger.debug(f"解析歌曲 {idx+1}: {song_name} - {artist_name}")
+                            except Exception as e:
+                                logger.warning(f"解析歌曲信息时出错: {e}, song={song}")
+                                continue
+                        
+                        logger.info(f"搜索成功，找到 {len(results)} 首歌曲")
+                        return results
+                    else:
+                        logger.warning(f"搜索API返回错误码或空结果: code={data.get('code')}")
+                        return None
             
             return None
             
+        except aiohttp.ClientError as e:
+            logger.error(f"搜索API请求失败: {e}")
+            return None
         except Exception as e:
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
             return None
@@ -203,6 +235,8 @@ class LyricGameSession:
         self.in_song: bool = False
         self.last_time: float = 0.0
         self.song_info: Optional[Dict] = None
+        self.selecting_song: bool = False  # 是否正在选择歌曲
+        self.song_candidates: List[Dict] = []  # 候选歌曲列表
 
 
 class LyricGame:
@@ -538,46 +572,51 @@ class LyricGamePlugin(Star):
         
         logger.info("歌词接龙插件初始化完成")
     
-    @filter.command("lyric")
+    @filter.command("接歌词")
     async def handle_lyric_command(self, event: AstrMessageEvent):
-        """处理/lyric指令，进入接歌词模式"""
+        """处理/接歌词指令，搜索歌曲并让用户选择"""
         user_id = event.unified_msg_origin
         message = event.message_str.strip()
         
         # 移除指令前缀
-        command_prefix = "/lyric"
+        command_prefix = "/接歌词"
         if message.startswith(command_prefix):
             message = message[len(command_prefix):].strip()
         
-        # 标记用户进入接歌词模式
-        self.active_sessions.add(user_id)
-        logger.info(f"用户 {user_id} 进入接歌词模式")
-        
         if not message:
-            yield event.plain_result("已进入接歌词模式，请发送歌词开始游戏！")
+            yield event.plain_result("请提供歌曲名或歌词片段，例如：/接歌词 晴天")
             return
         
-        # 尝试接歌
+        # 搜索歌曲
         try:
-            response = await self.game.handle(user_id, message)
+            session = self.game.get_session(user_id)
+            songs = await self.game.api.search_songs(message, limit=5)
             
-            if response:
-                # 匹配成功，发送下一句
-                yield event.plain_result(response)
-            else:
-                # 匹配失败，提示用户
-                yield event.plain_result("未识别到歌曲，请尝试其他歌词或检查API服务")
+            if not songs:
+                yield event.plain_result("未找到相关歌曲，请尝试其他关键词")
+                return
+            
+            # 存储候选歌曲
+            session.selecting_song = True
+            session.song_candidates = songs
+            self.active_sessions.add(user_id)  # 标记用户在选择歌曲状态
+            
+            # 显示搜索结果
+            result = "找到以下歌曲，请发送数字选择：\n"
+            for idx, song in enumerate(songs, 1):
+                result += f"{idx}. {song['name']} - {song['artist']}\n"
+            
+            yield event.plain_result(result.strip())
             
         except Exception as e:
-            logger.error(f"处理歌词接龙时出错: {e}", exc_info=True)
-            yield event.plain_result("处理失败，请重试")
-            self.active_sessions.discard(user_id)
+            logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
+            yield event.plain_result("搜索失败，请重试")
     
     async def on_message(self, event: AstrMessageEvent):
-        """监听所有消息，处理处于接歌词模式的用户"""
+        """监听所有消息，处理歌曲选择和歌词接龙"""
         user_id = event.unified_msg_origin
         
-        # 只处理处于接歌词模式的用户
+        # 只处理处于活跃状态的用户（选择歌曲或接歌词）
         if user_id not in self.active_sessions:
             return
         
@@ -593,7 +632,42 @@ class LyricGamePlugin(Star):
                 yield event.plain_result(response)
             return
         
-        # 尝试接歌
+        session = self.game.get_session(user_id)
+        
+        # 处理歌曲选择
+        if session.selecting_song and session.song_candidates:
+            try:
+                # 解析用户输入的数字
+                choice = int(message)
+                if 1 <= choice <= len(session.song_candidates):
+                    # 选择歌曲
+                    selected_song = session.song_candidates[choice - 1]
+                    session.selecting_song = False
+                    session.song_candidates = []
+                    
+                    # 获取歌词
+                    lyrics = await self.game.get_lyrics(selected_song['id'])
+                    if not lyrics:
+                        yield event.plain_result("未获取到歌词，请尝试其他歌曲")
+                        self.active_sessions.discard(user_id)
+                        return
+                    
+                    # 初始化会话
+                    session.song_id = selected_song['id']
+                    session.song_info = selected_song
+                    session.lyrics = lyrics
+                    session.position = 0
+                    session.in_song = True
+                    
+                    logger.info(f"用户 {user_id} 选择歌曲: {selected_song['name']}")
+                    yield event.plain_result(f"已选择《{selected_song['name']}》，请发送第一句歌词开始游戏！")
+                else:
+                    yield event.plain_result(f"请输入1-{len(session.song_candidates)}之间的数字")
+            except ValueError:
+                yield event.plain_result("请输入数字选择歌曲，或发送'退出接歌'退出")
+            return
+        
+        # 处理歌词接龙
         try:
             response = await self.game.handle(user_id, message)
             
