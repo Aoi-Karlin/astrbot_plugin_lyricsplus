@@ -727,6 +727,11 @@ class LyricGamePlugin(Star):
             logger.debug(f"用户 {user_id} 发送空消息，跳过处理")
             return
         
+        # 跳过纯数字消息，避免与数字选择处理器冲突
+        if message.isdigit():
+            logger.debug(f"用户 {user_id} 发送纯数字消息，跳过通用处理器")
+            return
+        
         # 处理退出命令
         if message in ['退出接歌', '结束接歌', 'quit', 'q']:
             logger.info(f"用户 {user_id} 退出接歌词模式")
