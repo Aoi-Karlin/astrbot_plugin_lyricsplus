@@ -462,12 +462,12 @@ class LyricGame:
         
         session.last_time = current_time
         
-        # 情况1：正在连唱中，验证输入是否匹配预期的下一句
-        if session.in_song and session.position < len(session.lyrics):
-            expected = session.lyrics[session.position]['text']  # 验证下一句
+        # 情况1：正在连唱中，验证输入是否匹配预期的歌词（position-1句）
+        if session.in_song and session.position > 0 and session.position < len(session.lyrics):
+            expected = session.lyrics[session.position - 1]['text']  # 验证上一句（用户应该输入的）
             
             if self.is_match(user_input, expected):
-                # 匹配成功，返回当前position的歌词，然后position+1
+                # 匹配成功，返回当前position句，然后position+1
                 logger.info(f"用户 {user_id} 连唱匹配成功")
                 current_line = session.lyrics[session.position]['text']
                 session.position += 1  # 准备下一次
@@ -534,7 +534,7 @@ class LyricGame:
         
         logger.info(f"定位成功，位置: {match_idx}，返回下一句")
         
-        # 返回下一句
+        # 返回匹配歌词的下一句（position-1句）
         if match_idx + 1 < len(lyrics):
             return lyrics[match_idx + 1]['text']
         else:
