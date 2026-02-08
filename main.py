@@ -683,6 +683,7 @@ class LyricGamePlugin(Star):
                 session.lyrics = lyrics
                 session.position = 0  # bot给出第0句，用户需要输入第0句确认，然后bot回复第1句
                 session.in_song = True
+                session.last_time = time.time()  # 设置当前时间，避免超时检查误判
                 
                 logger.info(f"用户 {user_id} 成功初始化歌曲会话")
                 
