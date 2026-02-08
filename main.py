@@ -434,7 +434,7 @@ class LyricGame:
         
         if lyrics:
             # 缓存到AstrBot存储
-            await self.plugin.set_kv_data(f"lyrics_{song_id}", lyrics)
+            await self.plugin.put_kv_data(f"lyrics_{song_id}", lyrics)
             logger.info(f"缓存歌词成功，歌曲ID: {song_id}")
         
         return lyrics
