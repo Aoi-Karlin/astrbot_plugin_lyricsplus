@@ -546,12 +546,12 @@ class LyricGame:
             session.song_id = song_info['id']
             session.song_info = song_info
         session.lyrics = lyrics
-        session.position = match_idx + 2  # 指向匹配歌词的下下一句（因为当前要返回下一句）
+        session.position = match_idx + 1  # 指向匹配歌词的下一句（用户下次需要输入的）
         session.in_song = True
         
         logger.info(f"定位成功，位置: {match_idx}，返回下一句")
         
-        # 返回匹配歌词的下一句（position-1句）
+        # 返回匹配歌词的下一句
         if match_idx + 1 < len(lyrics):
             return lyrics[match_idx + 1]['text']
         else:
