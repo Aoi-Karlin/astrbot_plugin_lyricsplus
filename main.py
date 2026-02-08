@@ -468,45 +468,42 @@ class LyricGame:
         
         session.last_time = current_time
         
-        # 情况1：正在连唱中，验证输入是否匹配预期的歌词（position句）
-        if session.in_song and session.position < len(session.lyrics):
-            expected = session.lyrics[session.position]['text']  # 验证当前句（用户应该输入的）
-            logger.info(f"[DEBUG] 用户 {user_id} position={session.position}, expected='{expected}', user_input='{user_input}'")
-            
-            if self.is_match(user_input, expected):
-                # 匹配成功，返回下下一句（position+2句），然后position+2
-                logger.info(f"用户 {user_id} 连唱匹配成功")
-                if session.position + 2 < len(session.lyrics):
-                    next_line = session.lyrics[session.position + 2]['text']
-                    old_position = session.position
-                    session.position += 2  # 准备下一次（用户需要输入下下句）
-                    logger.info(f"[DEBUG] 用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回下下句='{next_line}'")
-                    return next_line
-                else:
-                    logger.info("歌曲已唱完")
-                    session.in_song = False
-                    return "歌曲已唱完！"
-            else:
-                # 匹配失败，保持在当前位置，提示用户重试
-                similarity = self.calculate_similarity(user_input, expected)
-                logger.info(f"用户 {user_id} 连唱匹配失败，相似度: {similarity}%，保持在当前位置")
-                logger.info(f"[DEBUG] 用户 {user_id} 匹配失败，position={session.position}, expected='{expected}', user_input='{user_input}'")
-                msg_template = self.config.get('msg_match_failed', '不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送\'退出接歌\'可退出游戏')
-                return msg_template.format(similarity=similarity, user_input=user_input, expected=expected)
-        elif session.in_song and session.position >= len(session.lyrics):
+        # 检查是否在游戏中
+        if not session.in_song:
+            logger.debug(f"用户 {user_id} 不在游戏中，不处理")
+            return None
+        
+        # 检查位置是否有效
+        if session.position >= len(session.lyrics):
             # 歌曲已唱完
-            logger.info("歌曲已唱完")
-            session.in_song = False
-            return "歌曲已唱完！"
-        elif session.in_song and session.position >= len(session.lyrics):
-            # 歌曲已唱完
-            logger.info("歌曲已唱完")
+            logger.info(f"用户 {user_id} 歌曲已唱完，position={session.position}, 歌词总数={len(session.lyrics)}")
             session.in_song = False
             return "歌曲已唱完！"
         
-        # 情况2：不在游戏中，不处理
-        logger.debug(f"用户 {user_id} 不在游戏中，position={session.position if hasattr(session, 'position') else 'N/A'}")
-        return None
+        # 情况1：正在连唱中，验证输入是否匹配预期的歌词（position句）
+        expected = session.lyrics[session.position]['text']
+        logger.info(f"[DEBUG] 用户 {user_id} position={session.position}, expected='{expected}', user_input='{user_input}'")
+        
+        if self.is_match(user_input, expected):
+            # 匹配成功，返回下下一句（position+2句），然后position+2
+            logger.info(f"用户 {user_id} 连唱匹配成功")
+            if session.position + 2 < len(session.lyrics):
+                next_line = session.lyrics[session.position + 2]['text']
+                old_position = session.position
+                session.position += 2  # 准备下一次（用户需要输入下下句）
+                logger.info(f"[DEBUG] 用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回下下句='{next_line}'")
+                return next_line
+            else:
+                logger.info("歌曲已唱完")
+                session.in_song = False
+                return "歌曲已唱完！"
+        else:
+            # 匹配失败，保持在当前位置，提示用户重试
+            similarity = self.calculate_similarity(user_input, expected)
+            logger.info(f"用户 {user_id} 连唱匹配失败，相似度: {similarity}%，保持在当前位置")
+            logger.info(f"[DEBUG] 用户 {user_id} 匹配失败，position={session.position}, expected='{expected}', user_input='{user_input}'")
+            msg_template = self.config.get('msg_match_failed', '不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送\'退出接歌\'可退出游戏')
+            return msg_template.format(similarity=similarity, user_input=user_input, expected=expected)
     
     async def _output_next(self, session: LyricGameSession) -> Optional[str]:
         """
@@ -741,16 +738,20 @@ class LyricGamePlugin(Star):
             response = await self.game.handle(user_id, message)
             
             if response:
-                # 匹配成功，发送下一句
-                logger.info(f"用户 {user_id} 接歌词成功，返回: '{response}'")
+                # 匹配成功或失败，发送回复
+                logger.info(f"用户 {user_id} 接歌词返回: '{response}'")
                 event.stop_event()  # 阻止LLM回复
                 yield event.plain_result(response)
             else:
-                logger.debug(f"用户 {user_id} 接歌词未匹配，保持状态")
+                # response为None，说明不在游戏中或出现意外情况
+                logger.warning(f"用户 {user_id} 接歌词返回None，可能不在游戏中")
                 event.stop_event()  # 阻止LLM回复
-            # 匹配失败则不回复，保持在接歌词模式
+                yield event.plain_result("游戏状态异常，请重新开始")
+                self.active_sessions.discard(user_id)
             
         except Exception as e:
             logger.error(f"处理歌词接龙时出错: {e}", exc_info=True)
+            event.stop_event()  # 阻止LLM回复
+            yield event.plain_result("处理出错，已退出接歌词模式")
             # 发生错误时退出接歌词模式
             self.active_sessions.discard(user_id)
