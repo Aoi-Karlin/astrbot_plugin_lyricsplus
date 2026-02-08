@@ -476,7 +476,7 @@ class LyricGame:
         # 对唱逻辑：
         # position指向用户需要输入的歌词
         # 用户输入 position 句，验证通过后 bot 回复 position+1 句
-        # position 更新为 position+1
+        # position 更新为 position+2（跳过bot回复的那句，指向用户下次要输入的句子）
         
         # 检查是否还有足够的歌词
         if session.position >= len(session.lyrics):
@@ -495,8 +495,8 @@ class LyricGame:
             if session.position + 1 < len(session.lyrics):
                 next_line = session.lyrics[session.position + 1]['text']
                 old_position = session.position
-                session.position += 1  # 更新position，下次用户需要输入position+1句
-                logger.info(f"[DEBUG] 用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回第{session.position}句='{next_line}'")
+                session.position += 2  # 跳过bot回复的句子，指向用户下次要输入的句子
+                logger.info(f"[DEBUG] 用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回第{old_position + 1}句='{next_line}'")
                 return next_line
             else:
                 # 没有下一句了，歌曲唱完
