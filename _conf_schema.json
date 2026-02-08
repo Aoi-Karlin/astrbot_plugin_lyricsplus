@@ -27,5 +27,65 @@
     "min": 1,
     "max": 10,
     "hint": "建议值：3-8，数量越多选择越多但API调用越频繁"
+  },
+  "msg_empty_keyword": {
+    "description": "提示：请输入关键词",
+    "type": "string",
+    "default": "请提供歌曲名或歌词片段，例如：/接歌词 晴天",
+    "hint": "当用户使用/接歌词命令但未提供关键词时显示"
+  },
+  "msg_no_songs_found": {
+    "description": "提示：未找到歌曲",
+    "type": "string",
+    "default": "未找到相关歌曲，请尝试其他关键词",
+    "hint": "搜索无结果时显示"
+  },
+  "msg_search_failed": {
+    "description": "提示：搜索失败",
+    "type": "string",
+    "default": "搜索失败，请重试",
+    "hint": "搜索过程中发生错误时显示"
+  },
+  "msg_song_selection_prefix": {
+    "description": "提示：歌曲选择列表前缀",
+    "type": "string",
+    "default": "找到以下歌曲，请发送数字选择：",
+    "hint": "显示歌曲列表前的提示文字"
+  },
+  "msg_invalid_number": {
+    "description": "提示：无效的数字选择",
+    "type": "string",
+    "default": "请输入1-{count}之间的数字",
+    "hint": "用户输入了超出范围的数字时显示，{count}会被替换为实际歌曲数量"
+  },
+  "msg_selection_error": {
+    "description": "提示：选择歌曲时出错",
+    "type": "string",
+    "default": "选择歌曲时出错，请重试",
+    "hint": "选择歌曲过程中发生错误时显示"
+  },
+  "msg_no_lyrics": {
+    "description": "提示：未获取到歌词",
+    "type": "string",
+    "default": "未获取到歌词，请尝试其他歌曲",
+    "hint": "获取歌词失败时显示"
+  },
+  "msg_game_start": {
+    "description": "提示：游戏开始",
+    "type": "string",
+    "default": "已选择《{song_name}》\n请接歌词：{first_line}\n提示：歌词匹配阈值当前为{threshold}%，可在插件配置中调整（建议60-70）",
+    "hint": "选择歌曲成功后显示，{song_name}、{first_line}、{threshold}会被替换为实际值"
+  },
+  "msg_match_failed": {
+    "description": "提示：歌词不匹配",
+    "type": "string",
+    "default": "不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送'退出接歌'可退出游戏",
+    "hint": "用户输入的歌词不匹配时显示，{similarity}、{user_input}、{expected}会被替换为实际值"
+  },
+  "msg_exit_game": {
+    "description": "提示：退出游戏",
+    "type": "string",
+    "default": "已退出连唱模式",
+    "hint": "用户退出游戏时显示"
   }
 }

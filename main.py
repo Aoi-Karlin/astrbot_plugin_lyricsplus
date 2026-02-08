@@ -243,7 +243,7 @@ class LyricGameSession:
 class LyricGame:
     """歌词接龙游戏核心逻辑"""
     
-    def __init__(self, plugin, netease_api: str, cache_dir: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5):
+    def __init__(self, plugin, netease_api: str, cache_dir: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5, config: Optional[Dict] = None):
         self.plugin = plugin
         self.api = NeteaseAPI(netease_api)
         self.sessions: Dict[str, LyricGameSession] = {}
@@ -251,6 +251,7 @@ class LyricGame:
         self.match_threshold = match_threshold
         self.search_limit = search_limit
         self.cache_dir = cache_dir
+        self.config = config or {}
         
         logger.info(f"歌词接龙游戏初始化完成，会话超时: {session_timeout}秒，匹配阈值: {match_threshold}，搜索数量: {search_limit}，缓存目录: {self.cache_dir}")
     
@@ -471,8 +472,10 @@ class LyricGame:
                 return await self._output_next(session)
             else:
                 # 匹配失败，保持在当前歌曲中，提示用户重试
-                logger.info(f"用户 {user_id} 连唱匹配失败，保持在当前歌曲中")
-                return f"不匹配，请重试！\n上一句是：{expected}\n提示：发送'退出接歌'可退出游戏"
+                similarity = self.calculate_similarity(user_input, expected)
+                logger.info(f"用户 {user_id} 连唱匹配失败，相似度: {similarity}%，保持在当前歌曲中")
+                msg_template = self.config.get('msg_match_failed', '不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送\'退出接歌\'可退出游戏')
+                return msg_template.format(similarity=similarity, user_input=user_input, expected=expected)
         
         # 情况2：首次输入或重新定位
         # 检查是否已选择歌曲（通过/接歌词命令）
@@ -557,7 +560,7 @@ class LyricGame:
         if user_id in self.sessions:
             del self.sessions[user_id]
             logger.info(f"用户 {user_id} 已退出游戏")
-            return "已退出连唱模式"
+            return self.config.get('msg_exit_game', '已退出连唱模式')
         
         return None
 
@@ -588,7 +591,8 @@ class LyricGamePlugin(Star):
             cache_dir=cache_dir,
             session_timeout=self.config.get('session_timeout', 60),
             match_threshold=self.config.get('match_threshold', 75),
-            search_limit=self.config.get('search_limit', 5)
+            search_limit=self.config.get('search_limit', 5),
+            config=self.config
         )
         
         logger.info(f"歌词接龙插件初始化完成，插件名称: {self.name}，缓存目录: {cache_dir}")
@@ -609,7 +613,7 @@ class LyricGamePlugin(Star):
         logger.debug(f"收到指令，关键词: '{message}', 用户: {user_id}")
         
         if not message:
-            yield event.plain_result("请提供歌曲名或歌词片段，例如：/接歌词 晴天")
+            yield event.plain_result(self.config.get('msg_empty_keyword', '请提供歌曲名或歌词片段，例如：/接歌词 晴天'))
             return
         
         logger.info(f"搜索关键词: '{message}'")
@@ -621,7 +625,7 @@ class LyricGamePlugin(Star):
             songs = await self.game.api.search_songs(message, limit=self.game.search_limit)
             
             if not songs:
-                yield event.plain_result("未找到相关歌曲，请尝试其他关键词")
+                yield event.plain_result(self.config.get('msg_no_songs_found', '未找到相关歌曲，请尝试其他关键词'))
                 return
             
             # 存储候选歌曲
@@ -632,7 +636,8 @@ class LyricGamePlugin(Star):
             logger.info(f"用户 {user_id} 被添加到 active_sessions，当前活跃会话: {self.active_sessions}")
             
             # 显示搜索结果
-            result = "找到以下歌曲，请发送数字选择：\n"
+            prefix = self.config.get('msg_song_selection_prefix', '找到以下歌曲，请发送数字选择：')
+            result = prefix + "\n"
             for idx, song in enumerate(songs, 1):
                 result += f"{idx}. {song['name']} - {song['artist']}\n"
             
@@ -640,7 +645,7 @@ class LyricGamePlugin(Star):
             
         except Exception as e:
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
-            yield event.plain_result("搜索失败，请重试")
+            yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
     
     @filter.regex(r"^\d+$", priority=1000)
     async def handle_number_selection(self, event: AstrMessageEvent):
@@ -683,7 +688,7 @@ class LyricGamePlugin(Star):
                 
                 if not lyrics:
                     logger.warning(f"用户 {user_id} 获取歌词失败，歌曲ID: {selected_song['id']}")
-                    yield event.plain_result("未获取到歌词，请尝试其他歌曲")
+                    yield event.plain_result(self.config.get('msg_no_lyrics', '未获取到歌词，请尝试其他歌曲'))
                     self.active_sessions.discard(user_id)
                     return
                 
@@ -693,21 +698,25 @@ class LyricGamePlugin(Star):
                 session.song_id = selected_song['id']
                 session.song_info = selected_song
                 session.lyrics = lyrics
-                session.position = 0
+                session.position = 0  # 从第一句开始
                 session.in_song = True
                 
                 logger.info(f"用户 {user_id} 成功初始化歌曲会话")
-                yield event.plain_result(f"已选择《{selected_song['name']}》，请发送第一句歌词开始游戏！")
+                # 显示第一句歌词，让用户接第二句
+                first_line = lyrics[0]['text'] if lyrics else "暂无歌词"
+                msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n请接歌词：{first_line}\n提示：歌词匹配阈值当前为{threshold}%，可在插件配置中调整（建议60-70）')
+                yield event.plain_result(msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.match_threshold))
             else:
                 logger.warning(f"用户 {user_id} 输入无效数字: {choice}, 有效范围: 1-{len(session.song_candidates)}")
-                yield event.plain_result(f"请输入1-{len(session.song_candidates)}之间的数字")
+                msg_template = self.config.get('msg_invalid_number', '请输入1-{count}之间的数字')
+                yield event.plain_result(msg_template.format(count=len(session.song_candidates)))
         except ValueError as e:
             logger.warning(f"用户 {user_id} 输入非数字: '{message}', 错误: {e}")
             # 不是数字，让其他处理器处理
             return
         except Exception as e:
             logger.error(f"用户 {user_id} 选择歌曲时出错: {e}", exc_info=True)
-            yield event.plain_result("选择歌曲时出错，请重试")
+            yield event.plain_result(self.config.get('msg_selection_error', '选择歌曲时出错，请重试'))
             self.active_sessions.discard(user_id)
     
     @filter.regex(r".*", priority=999)
