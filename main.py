@@ -9,7 +9,8 @@ import re
 import time
 from typing import Optional, Dict, List
 from pathlib import Path
-from astrbot.api.star import Star, register, Context, star
+from astrbot.api import star, logger
+from astrbot.api.star import Star, register, Context
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
