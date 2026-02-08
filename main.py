@@ -243,7 +243,8 @@ class LyricGameSession:
 class LyricGame:
     """歌词接龙游戏核心逻辑"""
     
-    def __init__(self, netease_api: str, cache_dir: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5):
+    def __init__(self, plugin, netease_api: str, cache_dir: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5):
+        self.plugin = plugin
         self.api = NeteaseAPI(netease_api)
         self.sessions: Dict[str, LyricGameSession] = {}
         self.session_timeout = session_timeout
@@ -423,7 +424,7 @@ class LyricGame:
             歌词列表或None
         """
         # 从AstrBot存储读取缓存
-        cached = await star.get_data(f"lyrics_{song_id}")
+        cached = await self.plugin.get_data(f"lyrics_{song_id}")
         if cached:
             logger.debug(f"从缓存读取歌词，歌曲ID: {song_id}")
             return cached
@@ -433,7 +434,7 @@ class LyricGame:
         
         if lyrics:
             # 缓存到AstrBot存储
-            await star.set_data(f"lyrics_{song_id}", lyrics)
+            await self.plugin.set_data(f"lyrics_{song_id}", lyrics)
             logger.info(f"缓存歌词成功，歌曲ID: {song_id}")
         
         return lyrics
@@ -569,6 +570,7 @@ class LyricGamePlugin(Star):
         plugin_data_path.mkdir(parents=True, exist_ok=True)
         
         self.game = LyricGame(
+            plugin=self,
             netease_api=self.config.get('netease_api', 'http://localhost:3000'),
             cache_dir=cache_dir,
             session_timeout=self.config.get('session_timeout', 60),
