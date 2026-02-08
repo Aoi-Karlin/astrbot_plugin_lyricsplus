@@ -627,16 +627,84 @@ class LyricGamePlugin(Star):
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
             yield event.plain_result("搜索失败，请重试")
     
-    @filter.regex(r".*", priority=1)
-    async def handle_all_messages(self, event: AstrMessageEvent):
-        """监听所有消息，处理歌曲选择和歌词接龙"""
+    @filter.regex(r"^\d+$", priority=1000)
+    async def handle_number_selection(self, event: AstrMessageEvent):
+        """专门处理数字选择，高优先级"""
         user_id = event.unified_msg_origin
         
-        logger.debug(f"on_message 被调用，用户: {user_id}, active_sessions: {self.active_sessions}")
+        logger.info(f"数字选择处理器被调用，用户: {user_id}, active_sessions: {self.active_sessions}")
         
-        # 只处理处于活跃状态的用户（选择歌曲或接歌词）
+        # 只处理处于活跃状态的用户
         if user_id not in self.active_sessions:
-            logger.debug(f"用户 {user_id} 不在活跃会话中，跳过处理")
+            logger.debug(f"用户 {user_id} 不在活跃会话中，数字选择处理器跳过")
+            return
+        
+        message = event.message_str.strip()
+        logger.info(f"用户 {user_id} 发送数字: '{message}'")
+        
+        session = self.game.get_session(user_id)
+        
+        # 检查是否正在选择歌曲
+        if not session.selecting_song or not session.song_candidates:
+            logger.debug(f"用户 {user_id} 不在选择歌曲状态，跳过数字选择处理器")
+            return
+        
+        try:
+            # 解析用户输入的数字
+            choice = int(message)
+            logger.info(f"用户 {user_id} 解析数字: {choice}, 候选歌曲数量: {len(session.song_candidates)}")
+            
+            if 1 <= choice <= len(session.song_candidates):
+                # 选择歌曲
+                selected_song = session.song_candidates[choice - 1]
+                session.selecting_song = False
+                session.song_candidates = []
+                
+                logger.info(f"用户 {user_id} 选择歌曲: {selected_song['name']} (ID: {selected_song['id']})")
+                
+                # 获取歌词
+                logger.info(f"用户 {user_id} 开始获取歌词...")
+                lyrics = await self.game.get_lyrics(selected_song['id'])
+                
+                if not lyrics:
+                    logger.warning(f"用户 {user_id} 获取歌词失败，歌曲ID: {selected_song['id']}")
+                    yield event.plain_result("未获取到歌词，请尝试其他歌曲")
+                    self.active_sessions.discard(user_id)
+                    return
+                
+                logger.info(f"用户 {user_id} 成功获取歌词，数量: {len(lyrics)}")
+                
+                # 初始化会话
+                session.song_id = selected_song['id']
+                session.song_info = selected_song
+                session.lyrics = lyrics
+                session.position = 0
+                session.in_song = True
+                
+                logger.info(f"用户 {user_id} 成功初始化歌曲会话")
+                yield event.plain_result(f"已选择《{selected_song['name']}》，请发送第一句歌词开始游戏！")
+            else:
+                logger.warning(f"用户 {user_id} 输入无效数字: {choice}, 有效范围: 1-{len(session.song_candidates)}")
+                yield event.plain_result(f"请输入1-{len(session.song_candidates)}之间的数字")
+        except ValueError as e:
+            logger.warning(f"用户 {user_id} 输入非数字: '{message}', 错误: {e}")
+            # 不是数字，让其他处理器处理
+            return
+        except Exception as e:
+            logger.error(f"用户 {user_id} 选择歌曲时出错: {e}", exc_info=True)
+            yield event.plain_result("选择歌曲时出错，请重试")
+            self.active_sessions.discard(user_id)
+    
+    @filter.regex(r".*", priority=999)
+    async def handle_all_messages(self, event: AstrMessageEvent):
+        """监听所有消息，处理歌词接龙"""
+        user_id = event.unified_msg_origin
+        
+        logger.debug(f"通用消息处理器被调用，用户: {user_id}, active_sessions: {self.active_sessions}")
+        
+        # 只处理处于活跃状态的用户（接歌词）
+        if user_id not in self.active_sessions:
+            logger.debug(f"用户 {user_id} 不在活跃会话中，通用处理器跳过")
             return
         
         message = event.message_str.strip()
@@ -656,42 +724,10 @@ class LyricGamePlugin(Star):
             return
         
         session = self.game.get_session(user_id)
-        logger.debug(f"用户 {user_id} 会话状态: selecting_song={session.selecting_song}, candidates={len(session.song_candidates) if session.song_candidates else 0}")
         
-        # 处理歌曲选择
-        if session.selecting_song and session.song_candidates:
-            logger.info(f"用户 {user_id} 正在选择歌曲，输入: '{message}'")
-            try:
-                # 解析用户输入的数字
-                choice = int(message)
-                if 1 <= choice <= len(session.song_candidates):
-                    # 选择歌曲
-                    selected_song = session.song_candidates[choice - 1]
-                    session.selecting_song = False
-                    session.song_candidates = []
-                    
-                    logger.info(f"用户 {user_id} 选择歌曲: {selected_song['name']} (ID: {selected_song['id']})")
-                    
-                    # 获取歌词
-                    lyrics = await self.game.get_lyrics(selected_song['id'])
-                    if not lyrics:
-                        yield event.plain_result("未获取到歌词，请尝试其他歌曲")
-                        self.active_sessions.discard(user_id)
-                        return
-                    
-                    # 初始化会话
-                    session.song_id = selected_song['id']
-                    session.song_info = selected_song
-                    session.lyrics = lyrics
-                    session.position = 0
-                    session.in_song = True
-                    
-                    logger.info(f"用户 {user_id} 成功初始化歌曲，歌词数量: {len(lyrics)}")
-                    yield event.plain_result(f"已选择《{selected_song['name']}》，请发送第一句歌词开始游戏！")
-                else:
-                    yield event.plain_result(f"请输入1-{len(session.song_candidates)}之间的数字")
-            except ValueError:
-                yield event.plain_result("请输入数字选择歌曲，或发送'退出接歌'退出")
+        # 如果在选择歌曲状态，让数字选择处理器处理
+        if session.selecting_song:
+            logger.debug(f"用户 {user_id} 正在选择歌曲，通用处理器跳过")
             return
         
         # 处理歌词接龙
