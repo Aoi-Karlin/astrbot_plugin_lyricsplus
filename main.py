@@ -477,11 +477,12 @@ class LyricGame:
         # 情况2：首次输入或重新定位
         # 识别歌曲
         logger.info(f"用户 {user_id} 正在识别歌曲...")
-        song_info = await self.api.search_song(user_input)
-        if not song_info:
+        songs = await self.api.search_songs(user_input, limit=1)
+        if not songs or len(songs) == 0:
             logger.info(f"未识别到歌曲，用户输入: {user_input}")
             return None
         
+        song_info = songs[0]
         logger.info(f"识别到歌曲: {song_info['name']} - {song_info['artist']}")
         
         # 获取歌词
@@ -722,6 +723,7 @@ class LyricGamePlugin(Star):
             self.active_sessions.discard(user_id)
             response = await self.game.exit_session(user_id)
             if response:
+                event.stop_event()  # 阻止LLM回复
                 yield event.plain_result(response)
             return
         
@@ -740,9 +742,11 @@ class LyricGamePlugin(Star):
             if response:
                 # 匹配成功，发送下一句
                 logger.info(f"用户 {user_id} 接歌词成功，返回: '{response}'")
+                event.stop_event()  # 阻止LLM回复
                 yield event.plain_result(response)
             else:
                 logger.debug(f"用户 {user_id} 接歌词未匹配，保持状态")
+                event.stop_event()  # 阻止LLM回复
             # 匹配失败则不回复，保持在接歌词模式
             
         except Exception as e:
