@@ -19,5 +19,13 @@
     "min": 50,
     "max": 100,
     "hint": "建议值：60-80，数字越大越严格"
+  },
+  "search_limit": {
+    "description": "搜索返回歌曲数量",
+    "type": "int",
+    "default": 5,
+    "min": 1,
+    "max": 10,
+    "hint": "建议值：3-8，数量越多选择越多但API调用越频繁"
   }
 }

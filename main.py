@@ -242,11 +242,12 @@ class LyricGameSession:
 class LyricGame:
     """歌词接龙游戏核心逻辑"""
     
-    def __init__(self, netease_api: str, plugin_name: str, session_timeout: int = 60, match_threshold: int = 75):
+    def __init__(self, netease_api: str, plugin_name: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5):
         self.api = NeteaseAPI(netease_api)
         self.sessions: Dict[str, LyricGameSession] = {}
         self.session_timeout = session_timeout
         self.match_threshold = match_threshold
+        self.search_limit = search_limit
         
         # 使用标准插件数据目录
         plugin_data_path = get_astrbot_data_path() / "plugin_data" / plugin_name
@@ -255,7 +256,7 @@ class LyricGame:
         # 创建缓存目录
         plugin_data_path.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"歌词接龙游戏初始化完成，会话超时: {session_timeout}秒，匹配阈值: {match_threshold}，缓存目录: {self.cache_dir}")
+        logger.info(f"歌词接龙游戏初始化完成，会话超时: {session_timeout}秒，匹配阈值: {match_threshold}，搜索数量: {search_limit}，缓存目录: {self.cache_dir}")
     
     def get_session(self, user_id: str) -> LyricGameSession:
         """获取用户会话"""
@@ -554,23 +555,32 @@ class LyricGame:
 
 @register("lyric_game", "歌词接龙游戏", "1.0.0", "AstrBot")
 class LyricGamePlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: Optional[Dict] = None):
         super().__init__(context)
         self.game = None
         self.active_sessions = set()  # 记录正在接歌词的用户
+        self.config = config or {}
         
-    async def on_init(self, config: dict):
+    async def initialize(self):
         """插件初始化"""
         logger.info("歌词接龙插件初始化...")
         
         self.game = LyricGame(
-            netease_api=config.get('netease_api', 'http://localhost:3000'),
+            netease_api=self.config.get('netease_api', 'http://localhost:3000'),
             plugin_name=self.name,
-            session_timeout=config.get('session_timeout', 60),
-            match_threshold=config.get('match_threshold', 75)
+            session_timeout=self.config.get('session_timeout', 60),
+            match_threshold=self.config.get('match_threshold', 75),
+            search_limit=self.config.get('search_limit', 5)
         )
         
         logger.info("歌词接龙插件初始化完成")
+    
+    async def terminate(self):
+        """插件清理"""
+        logger.info("歌词接龙插件正在清理...")
+        # 清理活跃会话
+        self.active_sessions.clear()
+        logger.info("歌词接龙插件清理完成")
     
     @filter.command("接歌词")
     async def handle_lyric_command(self, event: AstrMessageEvent):
@@ -590,7 +600,7 @@ class LyricGamePlugin(Star):
         # 搜索歌曲
         try:
             session = self.game.get_session(user_id)
-            songs = await self.game.api.search_songs(message, limit=5)
+            songs = await self.game.api.search_songs(message, limit=self.game.search_limit)
             
             if not songs:
                 yield event.plain_result("未找到相关歌曲，请尝试其他关键词")
