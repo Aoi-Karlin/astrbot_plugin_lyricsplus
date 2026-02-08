@@ -424,7 +424,7 @@ class LyricGame:
             歌词列表或None
         """
         # 从AstrBot存储读取缓存
-        cached = await self.plugin.get_kv_data(f"lyrics_{song_id}")
+        cached = await self.plugin.get_kv_data(f"lyrics_{song_id}", None)
         if cached:
             logger.debug(f"从缓存读取歌词，歌曲ID: {song_id}")
             return cached
