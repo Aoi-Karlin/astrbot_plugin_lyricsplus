@@ -482,7 +482,7 @@ class LyricGame:
         if session.position >= len(session.lyrics):
             logger.info(f"用户 {user_id} 歌曲已唱完，position={session.position}, 歌词总数={len(session.lyrics)}")
             session.in_song = False
-            return "歌曲已唱完！"
+            return self.config.get('msg_song_completed', '🎉 歌曲已唱完！')
         
         # 用户应该输入的歌词（position句）
         expected = session.lyrics[session.position]['text']
@@ -497,12 +497,20 @@ class LyricGame:
                 old_position = session.position
                 session.position += 2  # 跳过bot回复的句子，指向用户下次要输入的句子
                 logger.info(f"[DEBUG] 用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回第{old_position + 1}句='{next_line}'")
+                
+                # 检查下次是否还有歌词（避免用户再发一条消息才看到"歌曲已唱完"）
+                if session.position >= len(session.lyrics):
+                    logger.info(f"用户 {user_id} 这是最后一轮，歌曲即将唱完")
+                    session.in_song = False
+                    msg_template = self.config.get('msg_song_completed_with_last_line', '{last_line}\n\n🎉 歌曲已唱完！')
+                    return msg_template.format(last_line=next_line)
+                
                 return next_line
             else:
                 # 没有下一句了，歌曲唱完
                 logger.info("歌曲已唱完")
                 session.in_song = False
-                return "歌曲已唱完！"
+                return self.config.get('msg_song_completed', '🎉 歌曲已唱完！')
         else:
             # 匹配失败，保持在当前位置，提示用户重试
             similarity = self.calculate_similarity(user_input, expected)

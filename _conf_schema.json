@@ -87,5 +87,17 @@
     "type": "string",
     "default": "已退出连唱模式",
     "hint": "用户退出游戏时显示"
+  },
+  "msg_song_completed": {
+    "description": "提示：歌曲已唱完",
+    "type": "string",
+    "default": "🎉 歌曲已唱完！",
+    "hint": "歌曲唱完时显示"
+  },
+  "msg_song_completed_with_last_line": {
+    "description": "提示：最后一句歌词+完成提示",
+    "type": "string",
+    "default": "{last_line}\n\n🎉 歌曲已唱完！",
+    "hint": "bot回复最后一句歌词时显示，{last_line}会被替换为最后一句歌词"
   }
 }
