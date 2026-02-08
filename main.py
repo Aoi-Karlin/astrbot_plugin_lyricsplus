@@ -471,6 +471,7 @@ class LyricGame:
         # 情况1：正在连唱中，验证输入是否匹配预期的歌词（position句）
         if session.in_song and session.position < len(session.lyrics):
             expected = session.lyrics[session.position]['text']  # 验证当前句（用户应该输入的）
+            logger.debug(f"情况1: position={session.position}, expected={expected}")
             
             if self.is_match(user_input, expected):
                 # 匹配成功，返回下一句（position+1句），然后position+1
@@ -478,6 +479,7 @@ class LyricGame:
                 if session.position + 1 < len(session.lyrics):
                     next_line = session.lyrics[session.position + 1]['text']
                     session.position += 1  # 准备下一次（用户需要输入下一句）
+                    logger.debug(f"情况1匹配成功: 返回下一句, position更新为{session.position}")
                     return next_line
                 else:
                     logger.info("歌曲已唱完")
@@ -487,6 +489,7 @@ class LyricGame:
                 # 匹配失败，保持在当前位置，提示用户重试
                 similarity = self.calculate_similarity(user_input, expected)
                 logger.info(f"用户 {user_id} 连唱匹配失败，相似度: {similarity}%，保持在当前位置")
+                logger.debug(f"情况1匹配失败: position={session.position}, expected={expected}, user_input={user_input}")
                 msg_template = self.config.get('msg_match_failed', '不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送\'退出接歌\'可退出游戏')
                 return msg_template.format(similarity=similarity, user_input=user_input, expected=expected)
         elif session.in_song and session.position >= len(session.lyrics):
@@ -534,6 +537,7 @@ class LyricGame:
         for i in range(len(lyrics)):
             if self.is_match(user_input, lyrics[i]['text']):
                 match_idx = i
+                logger.debug(f"情况2: 匹配到第{i}句: {lyrics[i]['text']}")
                 break
         
         if match_idx == -1:
@@ -549,7 +553,7 @@ class LyricGame:
         session.position = match_idx + 1  # 指向匹配歌词的下一句（用户下次需要输入的）
         session.in_song = True
         
-        logger.info(f"定位成功，位置: {match_idx}，返回下一句")
+        logger.info(f"定位成功，位置: {match_idx}，返回下一句, position设置为{session.position}")
         
         # 返回匹配歌词的下一句
         if match_idx + 1 < len(lyrics):
