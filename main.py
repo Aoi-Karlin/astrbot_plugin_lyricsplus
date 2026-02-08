@@ -705,7 +705,7 @@ class LyricGamePlugin(Star):
                 # 显示第一句歌词，让用户接第二句
                 first_line = lyrics[0]['text'] if lyrics else "暂无歌词"
                 msg_template = self.config.get('msg_game_start', '已选择《{song_name}》\n请接歌词：{first_line}\n提示：歌词匹配阈值当前为{threshold}%，可在插件配置中调整（建议60-70）')
-                yield event.plain_result(msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.match_threshold))
+                yield event.plain_result(msg_template.format(song_name=selected_song['name'], first_line=first_line, threshold=self.game.match_threshold))
             else:
                 logger.warning(f"用户 {user_id} 输入无效数字: {choice}, 有效范围: 1-{len(session.song_candidates)}")
                 msg_template = self.config.get('msg_invalid_number', '请输入1-{count}之间的数字')
