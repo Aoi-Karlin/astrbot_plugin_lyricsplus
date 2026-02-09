@@ -203,12 +203,17 @@ class NeteaseAPI:
                 text = re.sub(r'\(\d+,\d+,\d+\)', '', text_part)
                 
                 cleaned_text = text.strip()
-                if cleaned_text and not self._is_metadata_line(cleaned_text):
-                    lyrics.append({
-                        'time': timestamp,
-                        'text': cleaned_text
-                    })
+                if cleaned_text:
+                    is_meta = self._is_metadata_line(cleaned_text)
+                    if is_meta:
+                        logger.debug(f"过滤元数据行: '{cleaned_text}'")
+                    else:
+                        lyrics.append({
+                            'time': timestamp,
+                            'text': cleaned_text
+                        })
 
+        logger.debug(f"YRC歌词解析完成，保留 {len(lyrics)} 行")
         return lyrics
     
     def _parse_lrc_lyrics(self, lrc_content: str) -> List[Dict]:
@@ -242,16 +247,21 @@ class NeteaseAPI:
                 milliseconds = int(ms_str) * (10 if len(ms_str) == 2 else 1)
                 text = match[3].strip()
                 
-                if text and not self._is_metadata_line(text):
-                    timestamp = (minutes * 60 + seconds) * 1000 + milliseconds
-                    lyrics.append({
-                        'time': timestamp,
-                        'text': text
-                    })
+                if text:
+                    is_meta = self._is_metadata_line(text)
+                    if is_meta:
+                        logger.debug(f"过滤元数据行: '{text}'")
+                    else:
+                        timestamp = (minutes * 60 + seconds) * 1000 + milliseconds
+                        lyrics.append({
+                            'time': timestamp,
+                            'text': text
+                        })
         
         # 按时间戳排序
         lyrics.sort(key=lambda x: x['time'])
         
+        logger.debug(f"LRC歌词解析完成，保留 {len(lyrics)} 行")
         return lyrics
     
     def _is_metadata_line(self, text: str) -> bool:
@@ -264,15 +274,17 @@ class NeteaseAPI:
         Returns:
             是否为元数据行
         """
-        # 检查是否包含冒号且冒号前面是元数据关键词
+        # 检查是否包含冒号
         if ':' in text or '：' in text:
-            # 分割冒号前的部分
-            colon_parts = re.split(r'[：:]', text)
-            if len(colon_parts) > 0:
-                prefix = colon_parts[0].strip()
-                # 检查是否匹配元数据关键词
+            # 使用更宽松的正则，允许冒号前后有空格
+            # 匹配模式：关键词 + 可选空格 + 冒号
+            colon_match = re.search(r'^(.+?)\s*[：:]\s*(.+)$', text)
+            if colon_match:
+                prefix = colon_match.group(1).strip()
+                # 检查前缀是否完全匹配或包含元数据关键词
                 for keyword in self.metadata_keywords:
-                    if keyword in prefix:
+                    # 完全匹配或者关键词在前缀中
+                    if prefix == keyword or keyword in prefix:
                         return True
         
         return False
