@@ -795,8 +795,9 @@ class LyricGamePlugin(Star):
     async def handle_lyric_start_from(self, event: AstrMessageEvent):
         """从指定歌词开始游戏
         
-        用法：/接歌词 from 歌曲名 歌词关键词
-        例如：/接歌词 from 晴天 从前从前
+        用法：/接歌词 from 歌曲名,歌词关键词 或 /接歌词 from 歌曲名，歌词关键词
+        例如：/接歌词 from 晴天,从前从前
+              /接歌词 from I LOVE U，我爱你
         """
         user_id = event.unified_msg_origin
         
@@ -815,21 +816,31 @@ class LyricGamePlugin(Star):
         match = re.match(from_pattern, full_message, re.IGNORECASE)
         
         if not match:
-            yield event.plain_result("请提供歌曲名和歌词关键词，例如：/接歌词 from 晴天 从前从前")
+            yield event.plain_result("请提供歌曲名和歌词关键词，例如：/接歌词 from 晴天,从前从前")
             return
         
-        # 提取from后的内容，并分割成歌曲名和歌词关键词
+        # 提取from后的内容
         remaining = full_message[match.end():].strip()
         
-        # 使用空格分隔，第一个词是歌曲名，剩余是歌词
-        parts = remaining.split(None, 1)
-        
-        if len(parts) < 2:
-            yield event.plain_result("请同时提供歌曲名和歌词关键词，例如：/接歌词 from 晴天 从前从前")
+        # 使用中文或英文逗号分隔歌曲名和歌词关键词
+        if '，' in remaining:
+            parts = remaining.split('，', 1)
+        elif ',' in remaining:
+            parts = remaining.split(',', 1)
+        else:
+            yield event.plain_result("请使用逗号分隔歌曲名和歌词关键词，例如：/接歌词 from 晴天,从前从前 或 /接歌词 from 晴天，从前从前")
             return
         
-        song_keyword = parts[0]
-        lyric_keyword = parts[1]
+        if len(parts) < 2:
+            yield event.plain_result("请提供歌曲名和歌词关键词，例如：/接歌词 from 晴天,从前从前")
+            return
+        
+        song_keyword = parts[0].strip()
+        lyric_keyword = parts[1].strip()
+        
+        if not song_keyword or not lyric_keyword:
+            yield event.plain_result("歌曲名和歌词关键词都不能为空，例如：/接歌词 from 晴天,从前从前")
+            return
         
         logger.debug(f"收到from指令，完整消息: '{event.message_str}', 歌曲: '{song_keyword}', 歌词: '{lyric_keyword}', 用户: {user_id}")
         logger.info(f"搜索歌曲: '{song_keyword}', 歌词关键词: '{lyric_keyword}'")
