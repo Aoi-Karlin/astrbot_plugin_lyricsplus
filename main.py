@@ -4,17 +4,15 @@ AstrBot 歌词接龙插件
 """
 
 import aiohttp
-import logging
 import re
 import time
+import asyncio
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from pathlib import Path
-from astrbot.api import star, logger
-from astrbot.api.star import Star, register, Context
+from astrbot.api import logger
+from astrbot.api.star import Star, register, Context, StarTools
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
-logger = logging.getLogger(__name__)
 
 
 class NeteaseAPI:
@@ -22,6 +20,19 @@ class NeteaseAPI:
     
     def __init__(self, base_url: str = "http://localhost:3000"):
         self.base_url = base_url.rstrip('/')
+        self._session: Optional[aiohttp.ClientSession] = None
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """获取或创建session"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+    
+    async def close(self):
+        """关闭session"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            logger.info("NeteaseAPI session已关闭")
     
     async def search_songs(self, keyword: str, limit: int = 5) -> Optional[List[Dict]]:
         """
@@ -42,59 +53,60 @@ class NeteaseAPI:
         }
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=10) as resp:
-                    if resp.status != 200:
-                        logger.error(f"搜索API返回错误状态码: {resp.status}")
-                        return None
+            session = await self._get_session()
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    logger.error(f"搜索API返回错误状态码: {resp.status}")
+                    return None
+                
+                data = await resp.json()
+                
+                logger.debug(f"搜索API返回数据: {data}")
+                
+                if data.get('code') == 200 and data.get('result', {}).get('songs'):
+                    songs = data['result']['songs']
+                    results = []
+                    for idx, song in enumerate(songs):
+                        try:
+                            # 安全地提取歌曲信息
+                            song_id = str(song.get('id', ''))
+                            song_name = song.get('name', '未知歌曲')
+                            
+                            # 提取歌手信息
+                            artists = song.get('ar', [])
+                            artist_name = '未知歌手'
+                            if artists and len(artists) > 0:
+                                artist_name = artists[0].get('name', '未知歌手')
+                            
+                            # 提取专辑信息
+                            album = song.get('al', {})
+                            album_name = album.get('name', '未知专辑') if album else '未知专辑'
+                            
+                            results.append({
+                                'id': song_id,
+                                'name': song_name,
+                                'artist': artist_name,
+                                'album': album_name
+                            })
+                            logger.debug(f"解析歌曲 {idx+1}: {song_name} - {artist_name}")
+                        except (KeyError, TypeError, ValueError) as e:
+                            logger.warning(f"解析歌曲信息时出错: {e}, song={song}")
+                            continue
                     
-                    data = await resp.json()
-                    
-                    logger.debug(f"搜索API返回数据: {data}")
-                    
-                    if data.get('code') == 200 and data.get('result', {}).get('songs'):
-                        songs = data['result']['songs']
-                        results = []
-                        for idx, song in enumerate(songs):
-                            try:
-                                # 安全地提取歌曲信息
-                                song_id = str(song.get('id', ''))
-                                song_name = song.get('name', '未知歌曲')
-                                
-                                # 提取歌手信息
-                                artists = song.get('ar', [])
-                                artist_name = '未知歌手'
-                                if artists and len(artists) > 0:
-                                    artist_name = artists[0].get('name', '未知歌手')
-                                
-                                # 提取专辑信息
-                                album = song.get('al', {})
-                                album_name = album.get('name', '未知专辑') if album else '未知专辑'
-                                
-                                results.append({
-                                    'id': song_id,
-                                    'name': song_name,
-                                    'artist': artist_name,
-                                    'album': album_name
-                                })
-                                logger.debug(f"解析歌曲 {idx+1}: {song_name} - {artist_name}")
-                            except Exception as e:
-                                logger.warning(f"解析歌曲信息时出错: {e}, song={song}")
-                                continue
-                        
-                        logger.info(f"搜索成功，找到 {len(results)} 首歌曲")
-                        return results
-                    else:
-                        logger.warning(f"搜索API返回错误码或空结果: code={data.get('code')}")
-                        return None
-            
-            return None
-            
+                    logger.info(f"搜索成功，找到 {len(results)} 首歌曲")
+                    return results
+                else:
+                    logger.warning(f"搜索API返回错误码或空结果: code={data.get('code')}")
+                    return None
+        
         except aiohttp.ClientError as e:
             logger.error(f"搜索API请求失败: {e}")
             return None
-        except Exception as e:
-            logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
+        except asyncio.TimeoutError:
+            logger.error("搜索API请求超时")
+            return None
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error(f"解析搜索结果失败: {e}", exc_info=True)
             return None
     
     async def get_lyrics(self, song_id: str) -> Optional[List[Dict]]:
@@ -111,31 +123,37 @@ class NeteaseAPI:
         params = {'id': song_id}
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=10) as resp:
-                    if resp.status != 200:
-                        logger.error(f"歌词API返回错误状态码: {resp.status}")
-                        return None
-                    
-                    data = await resp.json()
-                    
-                    if data.get('code') != 200:
-                        logger.warning(f"获取歌词失败，歌曲ID: {song_id}")
-                        return None
-                    
-                    # 优先使用逐字歌词 yrc
-                    if data.get('yrc', {}).get('lyric'):
-                        return self._parse_yrc_lyrics(data['yrc']['lyric'])
-                    
-                    # 降级使用普通歌词 lrc
-                    if data.get('lrc', {}).get('lyric'):
-                        return self._parse_lrc_lyrics(data['lrc']['lyric'])
-                    
-                    logger.warning(f"未找到歌词内容，歌曲ID: {song_id}")
+            session = await self._get_session()
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    logger.error(f"歌词API返回错误状态码: {resp.status}")
                     return None
+                
+                data = await resp.json()
+                
+                if data.get('code') != 200:
+                    logger.warning(f"获取歌词失败，歌曲ID: {song_id}")
+                    return None
+                
+                # 优先使用逐字歌词 yrc
+                if data.get('yrc', {}).get('lyric'):
+                    return self._parse_yrc_lyrics(data['yrc']['lyric'])
+                
+                # 降级使用普通歌词 lrc
+                if data.get('lrc', {}).get('lyric'):
+                    return self._parse_lrc_lyrics(data['lrc']['lyric'])
+                
+                logger.warning(f"未找到歌词内容，歌曲ID: {song_id}")
+                return None
         
-        except Exception as e:
-            logger.error(f"获取歌词时出错: {e}", exc_info=True)
+        except aiohttp.ClientError as e:
+            logger.error(f"歌词API请求失败: {e}")
+            return None
+        except asyncio.TimeoutError:
+            logger.error("歌词API请求超时")
+            return None
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error(f"解析歌词失败: {e}", exc_info=True)
             return None
     
     def _parse_yrc_lyrics(self, yrc_content: str) -> List[Dict]:
@@ -241,6 +259,7 @@ class LyricGameSession:
         self.position: int = 0
         self.in_song: bool = False
         self.last_time: float = 0.0
+        self.last_active: datetime = datetime.now()  # 用于会话清理
         self.song_info: Optional[Dict] = None
         self.selecting_song: bool = False  # 是否正在选择歌曲
         self.song_candidates: List[Dict] = []  # 候选歌曲列表
@@ -259,13 +278,58 @@ class LyricGame:
         self.search_limit = search_limit
         self.cache_dir = cache_dir
         self.config = config or {}
+        self._cleanup_task: Optional[asyncio.Task] = None
         
         logger.info(f"歌词接龙游戏初始化完成，会话超时: {session_timeout}秒，匹配阈值: {match_threshold}，搜索数量: {search_limit}，缓存目录: {self.cache_dir}")
+    
+    async def start_cleanup_task(self):
+        """启动会话清理任务"""
+        self._cleanup_task = asyncio.create_task(self._cleanup_sessions())
+        logger.info("会话清理任务已启动")
+    
+    async def _cleanup_sessions(self):
+        """定期清理超时会话"""
+        while True:
+            try:
+                await asyncio.sleep(300)  # 每5分钟清理一次
+                now = datetime.now()
+                expired_users = []
+                
+                for user_id, session in self.sessions.items():
+                    # 清理超过2倍超时时间且未在游戏中的会话
+                    if now - session.last_active > timedelta(seconds=self.session_timeout * 2):
+                        if not session.in_song:
+                            expired_users.append(user_id)
+                
+                for user_id in expired_users:
+                    del self.sessions[user_id]
+                    logger.info(f"清理过期会话: {user_id}")
+                
+                if expired_users:
+                    logger.info(f"本次清理了 {len(expired_users)} 个过期会话")
+            except asyncio.CancelledError:
+                logger.info("会话清理任务已取消")
+                break
+            except Exception as e:
+                logger.error(f"会话清理任务出错: {e}", exc_info=True)
+    
+    async def stop_cleanup_task(self):
+        """停止清理任务"""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("会话清理任务已停止")
     
     def get_session(self, user_id: str) -> LyricGameSession:
         """获取用户会话"""
         if user_id not in self.sessions:
             self.sessions[user_id] = LyricGameSession()
+        else:
+            # 更新最后活跃时间
+            self.sessions[user_id].last_active = datetime.now()
         return self.sessions[user_id]
     
     def clean_text(self, text: str) -> str:
@@ -487,7 +551,7 @@ class LyricGame:
         
         # 用户应该输入的歌词（position句）
         expected = session.lyrics[session.position]['text']
-        logger.info(f"[DEBUG] 用户 {user_id} position={session.position}, 用户应输入第{session.position}句='{expected}', user_input='{user_input}'")
+        logger.debug(f"用户 {user_id} position={session.position}, 用户应输入第{session.position}句='{expected}', user_input='{user_input}'")
         
         if self.is_match(user_input, expected):
             # 匹配成功，返回 position+1 句
@@ -497,7 +561,7 @@ class LyricGame:
                 next_line = session.lyrics[session.position + 1]['text']
                 old_position = session.position
                 session.position += 2  # 跳过bot回复的句子，指向用户下次要输入的句子
-                logger.info(f"[DEBUG] 用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回第{old_position + 1}句='{next_line}'")
+                logger.debug(f"用户 {user_id} 验证通过，position从{old_position}更新为{session.position}, 返回第{old_position + 1}句='{next_line}'")
                 
                 # 检查下次是否还有歌词（避免用户再发一条消息才看到"歌曲已唱完"）
                 if session.position >= len(session.lyrics):
@@ -516,7 +580,7 @@ class LyricGame:
             # 匹配失败，保持在当前位置，提示用户重试
             similarity = self.calculate_similarity(user_input, expected)
             logger.info(f"用户 {user_id} 对唱匹配失败，相似度: {similarity}%，保持在当前位置")
-            logger.info(f"[DEBUG] 用户 {user_id} 匹配失败，position={session.position}, expected='{expected}', user_input='{user_input}'")
+            logger.debug(f"用户 {user_id} 匹配失败，position={session.position}, expected='{expected}', user_input='{user_input}'")
             msg_template = self.config.get('msg_match_failed', '不匹配（相似度: {similarity}%），请重试！\n你输入: {user_input}\n正确歌词: {expected}\n提示：发送\'退出接歌\'可退出游戏')
             return msg_template.format(similarity=similarity, user_input=user_input, expected=expected)
     
@@ -569,9 +633,8 @@ class LyricGamePlugin(Star):
         """插件初始化"""
         logger.info("歌词接龙插件初始化...")
         
-        # 使用标准插件数据目录
-        data_path = Path(get_astrbot_data_path())
-        plugin_data_path = data_path / "plugin_data" / self.name
+        # 使用框架推荐的方法获取插件数据目录
+        plugin_data_path = StarTools.get_data_dir(self.name)
         cache_dir = str(plugin_data_path)
         
         # 创建缓存目录
@@ -587,25 +650,45 @@ class LyricGamePlugin(Star):
             config=self.config
         )
         
+        # 启动会话清理任务
+        await self.game.start_cleanup_task()
+        
         logger.info(f"歌词接龙插件初始化完成，插件名称: {self.name}，缓存目录: {cache_dir}")
     
     async def terminate(self):
         """插件清理"""
         logger.info("歌词接龙插件正在清理...")
+        
+        # 停止会话清理任务
+        if self.game:
+            await self.game.stop_cleanup_task()
+            # 关闭API session
+            if self.game.api:
+                await self.game.api.close()
+        
         # 清理活跃会话
         self.active_sessions.clear()
         logger.info("歌词接龙插件清理完成")
     
-    @filter.command("接歌词")
-    async def handle_lyric_command(self, event: AstrMessageEvent, keyword: str = ""):
-        """处理/接歌词指令，搜索歌曲并让用户选择"""
+    @filter.command_group("接歌词")
+    def lyric_game_group(self):
+        """歌词接龙游戏指令组"""
+        pass
+    
+    @lyric_game_group.command("search")
+    async def handle_lyric_search(self, event: AstrMessageEvent, keyword: str = ""):
+        """搜索歌曲并从第一句开始
+        
+        用法：/接歌词 search 歌曲名
+        例如：/接歌词 search 晴天
+        """
         user_id = event.unified_msg_origin
         message = keyword.strip()
         
-        logger.debug(f"收到指令，关键词: '{message}', 用户: {user_id}")
+        logger.debug(f"收到搜索指令，关键词: '{message}', 用户: {user_id}")
         
         if not message:
-            yield event.plain_result(self.config.get('msg_empty_keyword', '请提供歌曲名或歌词片段，例如：/接歌词 晴天'))
+            yield event.plain_result(self.config.get('msg_empty_keyword', '请提供歌曲名或歌词片段，例如：/接歌词 search 晴天'))
             return
         
         logger.info(f"搜索关键词: '{message}'")
@@ -635,34 +718,27 @@ class LyricGamePlugin(Star):
             
             yield event.plain_result(result.strip())
             
+        except aiohttp.ClientError as e:
+            logger.error(f"搜索歌曲API失败: {e}")
+            yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
         except Exception as e:
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
             yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
     
-    @filter.command("接歌词开始")
-    async def handle_lyric_start_from(self, event: AstrMessageEvent, keyword: str = ""):
-        """处理/接歌词开始指令，从指定歌词句子开始游戏
+    @lyric_game_group.command("from")
+    async def handle_lyric_start_from(self, event: AstrMessageEvent, song_keyword: str = "", lyric_keyword: str = ""):
+        """从指定歌词开始游戏
         
-        用法：/接歌词开始 歌曲名 歌词关键词
-        例如：/接歌词开始 晴天 从前从前
+        用法：/接歌词 from 歌曲名 歌词关键词
+        例如：/接歌词 from 晴天 从前从前
         """
         user_id = event.unified_msg_origin
-        message = keyword.strip()
         
-        logger.debug(f"收到开始指令，关键词: '{message}', 用户: {user_id}")
+        logger.debug(f"收到from指令，歌曲: '{song_keyword}', 歌词: '{lyric_keyword}', 用户: {user_id}")
         
-        if not message:
-            yield event.plain_result("请提供歌曲名和歌词关键词，例如：/接歌词开始 晴天 从前从前")
+        if not song_keyword or not lyric_keyword:
+            yield event.plain_result("请提供歌曲名和歌词关键词，例如：/接歌词 from 晴天 从前从前")
             return
-        
-        # 分割歌曲名和歌词关键词（用空格分隔，第一个词是歌曲名，剩余是歌词）
-        parts = message.split(None, 1)
-        if len(parts) < 2:
-            yield event.plain_result("请同时提供歌曲名和歌词关键词，例如：/接歌词开始 晴天 从前从前")
-            return
-        
-        song_keyword = parts[0]
-        lyric_keyword = parts[1]
         
         logger.info(f"搜索歌曲: '{song_keyword}', 歌词关键词: '{lyric_keyword}'")
         
@@ -682,7 +758,7 @@ class LyricGamePlugin(Star):
             session.start_lyric_keyword = lyric_keyword  # 保存歌词关键词
             self.active_sessions.add(user_id)
             
-            logger.info(f"用户 {user_id} 被添加到 active_sessions（开始模式），歌词关键词: {lyric_keyword}")
+            logger.info(f"用户 {user_id} 被添加到 active_sessions（from模式），歌词关键词: {lyric_keyword}")
             
             # 显示搜索结果
             prefix = self.config.get('msg_song_selection_prefix', '找到以下歌曲，请发送数字选择：')
@@ -692,6 +768,9 @@ class LyricGamePlugin(Star):
             
             yield event.plain_result(result.strip())
             
+        except aiohttp.ClientError as e:
+            logger.error(f"搜索歌曲API失败: {e}")
+            yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
         except Exception as e:
             logger.error(f"搜索歌曲时出错: {e}", exc_info=True)
             yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
