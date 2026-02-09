@@ -671,6 +671,7 @@ class LyricGame:
 class LyricGamePlugin(Star):
     def __init__(self, context: Context, config: Optional[Dict] = None):
         super().__init__(context)
+        self.name = "lyric_game"  # 插件名称
         self.game = None
         self.active_sessions = set()  # 记录正在接歌词的用户
         self.config = config or {}
