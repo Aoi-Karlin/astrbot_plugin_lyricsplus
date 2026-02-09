@@ -263,30 +263,44 @@ class NeteaseAPI:
         
         logger.debug(f"LRC歌词解析完成，保留 {len(lyrics)} 行")
         return lyrics
-    
+
     def _is_metadata_line(self, text: str) -> bool:
         """
         判断是否为元数据行（如作词、作曲、编曲等信息）
-        
+
         Args:
             text: 歌词文本
-            
+
         Returns:
             是否为元数据行
         """
-        # 检查是否包含冒号
-        if ':' in text or '：' in text:
-            # 使用更宽松的正则，允许冒号前后有空格
-            # 匹配模式：关键词 + 可选空格 + 冒号
-            colon_match = re.search(r'^(.+?)\s*[：:]\s*(.+)$', text)
-            if colon_match:
-                prefix = colon_match.group(1).strip()
-                # 检查前缀是否完全匹配或包含元数据关键词
-                for keyword in self.metadata_keywords:
-                    # 完全匹配或者关键词在前缀中
-                    if prefix == keyword or keyword in prefix:
-                        return True
-        
+        if not text:
+            return False
+
+        # 1. 快速检查是否包含冒号（无冒号通常不是元数据行，提高效率）
+        if ':' not in text and '：' not in text:
+            return False
+
+        # 2. 归一化处理
+        # 将全角冒号替换为半角，统一标准
+        normalized_text = text.replace('：', ':')
+
+        # 去除所有空白字符（空格、制表符等），并将文本转为小写以便忽略大小写差异
+        # 这样 "作 词 : xxx" 会变成 "作词:xxx"
+        cleaned_text = re.sub(r'\s+', '', normalized_text).lower()
+
+        # 3. 遍历关键词进行匹配
+        for keyword in self.metadata_keywords:
+            # 同样清洗关键词（去除空格，转小写）
+            clean_kw = re.sub(r'\s+', '', keyword).lower()
+
+            # 检查：清洗后的文本是否以 "关键词:" 开头
+            # 逻辑：如果歌词是 "作词 : 单身汪"，清洗后为 "作词:单身汪"
+            # 关键词 "作词" 清洗后为 "作词"，加上冒号为 "作词:"
+            # 匹配成功
+            if cleaned_text.startswith(f"{clean_kw}:"):
+                return True
+
         return False
 
 
