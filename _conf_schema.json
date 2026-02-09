@@ -128,8 +128,7 @@
   },
   "command_prefixes": {
     "description": "指令前缀列表",
-    "type": "array",
-    "items": { "type": "string" },
+    "type": "list",
     "default": ["/", "!", "?", "。", "#"],
     "hint": "这些字符开头的消息将被识别为指令，不会触发歌词接龙匹配"
   }
