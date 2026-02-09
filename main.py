@@ -1047,6 +1047,11 @@ class LyricGamePlugin(Star):
                 logger.info(f"用户 {user_id} 接歌词返回: '{response}'")
                 event.stop_event()  # 阻止LLM回复
                 yield event.plain_result(response)
+                
+                # 检查游戏是否已结束（歌曲唱完）
+                if not session.in_song:
+                    logger.info(f"用户 {user_id} 游戏已结束，从 active_sessions 移除")
+                    self.active_sessions.discard(user_id)
             else:
                 # response为None，说明不在游戏中或出现意外情况
                 logger.warning(f"用户 {user_id} 接歌词返回None，可能不在游戏中")
