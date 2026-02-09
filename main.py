@@ -611,7 +611,7 @@ class LyricGame:
                 
                 # 检查下次是否还有歌词（避免用户再发一条消息才看到"歌曲已唱完"）
                 if session.position >= len(session.lyrics):
-                    logger.info(f"用户 {user_id} 这是最后一轮，歌曲即将唱完")
+                    logger.info(f"用户 {user_id} 这是最后一轮，歌曲即将唱完，设置 in_song=False")
                     session.in_song = False
                     msg_template = self.config.get('msg_song_completed_with_last_line', '{last_line}\n\n🎉 歌曲已唱完！')
                     return msg_template.format(last_line=next_line)
@@ -619,7 +619,7 @@ class LyricGame:
                 return next_line
             else:
                 # 没有下一句了，歌曲唱完
-                logger.info("歌曲已唱完")
+                logger.info(f"用户 {user_id} 歌曲已唱完（无下一句），设置 in_song=False")
                 session.in_song = False
                 return self.config.get('msg_song_completed', '🎉 歌曲已唱完！')
         else:
@@ -988,9 +988,14 @@ class LyricGamePlugin(Star):
             
             if response:
                 # 匹配成功或失败，发送回复
-                logger.info(f"用户 {user_id} 接歌词返回: '{response}'")
+                logger.info(f"用户 {user_id} 接歌词返回: '{response}', in_song={session.in_song}")
                 event.stop_event()  # 阻止LLM回复
                 yield event.plain_result(response)
+                
+                # 如果游戏已结束（in_song为False），清理active_sessions
+                if not session.in_song:
+                    logger.info(f"用户 {user_id} 游戏已结束，清理active_sessions")
+                    self.active_sessions.discard(user_id)
             else:
                 # response为None，说明不在游戏中或出现意外情况
                 logger.warning(f"用户 {user_id} 接歌词返回None，可能不在游戏中")
