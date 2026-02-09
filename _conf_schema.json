@@ -125,5 +125,12 @@
       "Master", "Producer", "Guitar", "Bass", "Drum"
     ],
     "hint": "包含这些关键词+冒号的歌词行将被视为元数据并过滤掉，例如'作词：XXX'会被过滤"
+  },
+  "command_prefixes": {
+    "description": "指令前缀列表",
+    "type": "array",
+    "items": { "type": "string" },
+    "default": ["/", "!", "?", "。", "#"],
+    "hint": "这些字符开头的消息将被识别为指令，不会触发歌词接龙匹配"
   }
 }
