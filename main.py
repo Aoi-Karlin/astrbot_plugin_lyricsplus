@@ -18,9 +18,20 @@ from astrbot.api.event import filter, AstrMessageEvent
 class NeteaseAPI:
     """网易云音乐API封装"""
     
-    def __init__(self, base_url: str = "http://localhost:3000"):
+    def __init__(self, base_url: str = "http://localhost:3000", metadata_keywords: Optional[List[str]] = None):
         self.base_url = base_url.rstrip('/')
         self._session: Optional[aiohttp.ClientSession] = None
+        
+        # 元数据过滤关键词列表
+        self.metadata_keywords = metadata_keywords or [
+            '作词', '作曲', '编曲', '演唱', '歌手', '专辑',
+            '制作', '监制', '混音', '母带', '录音', '和声',
+            '吉他', '贝斯', '鼓', '键盘', '制作人', '出品',
+            '发行', 'OP', 'SP', '词', '曲', '唱', '编',
+            '音乐', '画师', '调校', '映像', '封面', 'PV',
+            'Vocal', 'Arrange', 'Lyrics', 'Music', 'Mix',
+            'Master', 'Producer', 'Guitar', 'Bass', 'Drum'
+        ]
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或创建session"""
@@ -192,15 +203,12 @@ class NeteaseAPI:
                 text = re.sub(r'\(\d+,\d+,\d+\)', '', text_part)
                 
                 cleaned_text = text.strip()
-                if cleaned_text:
+                if cleaned_text and not self._is_metadata_line(cleaned_text):
                     lyrics.append({
                         'time': timestamp,
                         'text': cleaned_text
                     })
 
-        # 过滤掉包含 英文冒号(:) 或 中文冒号(：) 的行
-        lyrics = [line for line in lyrics if ':' not in line['text'] and '：' not in line['text']]
-        
         return lyrics
     
     def _parse_lrc_lyrics(self, lrc_content: str) -> List[Dict]:
@@ -234,7 +242,7 @@ class NeteaseAPI:
                 milliseconds = int(ms_str) * (10 if len(ms_str) == 2 else 1)
                 text = match[3].strip()
                 
-                if text:
+                if text and not self._is_metadata_line(text):
                     timestamp = (minutes * 60 + seconds) * 1000 + milliseconds
                     lyrics.append({
                         'time': timestamp,
@@ -244,10 +252,30 @@ class NeteaseAPI:
         # 按时间戳排序
         lyrics.sort(key=lambda x: x['time'])
         
-        # 过滤掉含有冒号的歌词
-        lyrics = [line for line in lyrics if ':' not in line['text'] and '：' not in line['text']]
-        
         return lyrics
+    
+    def _is_metadata_line(self, text: str) -> bool:
+        """
+        判断是否为元数据行（如作词、作曲、编曲等信息）
+        
+        Args:
+            text: 歌词文本
+            
+        Returns:
+            是否为元数据行
+        """
+        # 检查是否包含冒号且冒号前面是元数据关键词
+        if ':' in text or '：' in text:
+            # 分割冒号前的部分
+            colon_parts = re.split(r'[：:]', text)
+            if len(colon_parts) > 0:
+                prefix = colon_parts[0].strip()
+                # 检查是否匹配元数据关键词
+                for keyword in self.metadata_keywords:
+                    if keyword in prefix:
+                        return True
+        
+        return False
 
 
 class LyricGameSession:
@@ -271,13 +299,17 @@ class LyricGame:
     
     def __init__(self, plugin, netease_api: str, cache_dir: str, session_timeout: int = 60, match_threshold: int = 75, search_limit: int = 5, config: Optional[Dict] = None):
         self.plugin = plugin
-        self.api = NeteaseAPI(netease_api)
+        self.config = config or {}
+        
+        # 从配置读取元数据过滤关键词
+        metadata_keywords = self.config.get('metadata_filter_keywords', None)
+        
+        self.api = NeteaseAPI(netease_api, metadata_keywords=metadata_keywords)
         self.sessions: Dict[str, LyricGameSession] = {}
         self.session_timeout = session_timeout
         self.match_threshold = match_threshold
         self.search_limit = search_limit
         self.cache_dir = cache_dir
-        self.config = config or {}
         self._cleanup_task: Optional[asyncio.Task] = None
         
         logger.info(f"歌词接龙游戏初始化完成，会话超时: {session_timeout}秒，匹配阈值: {match_threshold}，搜索数量: {search_limit}，缓存目录: {self.cache_dir}")

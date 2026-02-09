@@ -111,5 +111,19 @@
     "type": "string",
     "default": "未在《{song_name}》中找到歌词：{keyword}\n请尝试其他关键词或使用/接歌词选择从第一句开始",
     "hint": "搜索不到指定歌词时显示，{song_name}、{keyword}会被替换为实际值"
+  },
+  "metadata_filter_keywords": {
+    "description": "歌词元数据过滤关键词列表",
+    "type": "list",
+    "default": [
+      "作词", "作曲", "编曲", "演唱", "歌手", "专辑",
+      "制作", "监制", "混音", "母带", "录音", "和声",
+      "吉他", "贝斯", "鼓", "键盘", "制作人", "出品",
+      "发行", "OP", "SP", "词", "曲", "唱", "编",
+      "音乐", "画师", "调校", "映像", "封面", "PV",
+      "Vocal", "Arrange", "Lyrics", "Music", "Mix",
+      "Master", "Producer", "Guitar", "Bass", "Drum"
+    ],
+    "hint": "包含这些关键词+冒号的歌词行将被视为元数据并过滤掉，例如'作词：XXX'会被过滤"
   }
 }
