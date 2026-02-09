@@ -9,6 +9,7 @@ import time
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
+from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.star import Star, register, Context, StarTools
 from astrbot.api.event import filter, AstrMessageEvent
@@ -262,36 +263,33 @@ class NeteaseAPI:
         
         logger.debug(f"LRC歌词解析完成，保留 {len(lyrics)} 行")
         return lyrics
-
+    
     def _is_metadata_line(self, text: str) -> bool:
         """
-        判断是否为元数据行 - 最终增强版
+        判断是否为元数据行（如作词、作曲、编曲等信息）
+        
+        Args:
+            text: 歌词文本
+            
+        Returns:
+            是否为元数据行
         """
-        if not text:
-            return False
-
-        # 1. 剥离可能残留的时间轴
-        text_content = re.sub(r'^\[.*?\]', '', text)
-        if not text_content.strip():
-            return False
-
-        # 2. 预处理：统一全角冒号，移除所有空白，转小写
-        # 兼容 ASCII冒号(:), 全角冒号(：)
-        normalized = text_content.replace('：', ':')
-        cleaned = re.sub(r'\s+', '', normalized).lower()
-
-        # 3. 匹配关键词
-        for keyword in self.metadata_keywords:
-            # 同样清洗关键词
-            clean_kw = re.sub(r'\s+', '', keyword).lower()
-
-            # 检查是否以 "关键词:" 开头
-            if cleaned.startswith(f"{clean_kw}:"):
-                return True
-
+        # 检查是否包含冒号
+        if ':' in text or '：' in text:
+            # 使用更宽松的正则，允许冒号前后有空格
+            # 匹配模式：关键词 + 可选空格 + 冒号
+            colon_match = re.search(r'^(.+?)\s*[：:]\s*(.+)$', text)
+            if colon_match:
+                prefix = colon_match.group(1).strip()
+                # 检查前缀是否完全匹配或包含元数据关键词
+                for keyword in self.metadata_keywords:
+                    # 完全匹配或者关键词在前缀中
+                    if prefix == keyword or keyword in prefix:
+                        return True
+        
         return False
 
-    
+
 class LyricGameSession:
     """歌词游戏会话"""
     
@@ -611,7 +609,7 @@ class LyricGame:
                 
                 # 检查下次是否还有歌词（避免用户再发一条消息才看到"歌曲已唱完"）
                 if session.position >= len(session.lyrics):
-                    logger.info(f"用户 {user_id} 这是最后一轮，歌曲即将唱完，设置 in_song=False")
+                    logger.info(f"用户 {user_id} 这是最后一轮，歌曲即将唱完")
                     session.in_song = False
                     msg_template = self.config.get('msg_song_completed_with_last_line', '{last_line}\n\n🎉 歌曲已唱完！')
                     return msg_template.format(last_line=next_line)
@@ -619,7 +617,7 @@ class LyricGame:
                 return next_line
             else:
                 # 没有下一句了，歌曲唱完
-                logger.info(f"用户 {user_id} 歌曲已唱完（无下一句），设置 in_song=False")
+                logger.info("歌曲已唱完")
                 session.in_song = False
                 return self.config.get('msg_song_completed', '🎉 歌曲已唱完！')
         else:
@@ -671,7 +669,6 @@ class LyricGame:
 class LyricGamePlugin(Star):
     def __init__(self, context: Context, config: Optional[Dict] = None):
         super().__init__(context)
-        self.name = "lyric_game"  # 插件名称
         self.game = None
         self.active_sessions = set()  # 记录正在接歌词的用户
         self.config = config or {}
@@ -723,28 +720,50 @@ class LyricGamePlugin(Star):
         pass
     
     @lyric_game_group.command("search")
-    async def handle_lyric_search(self, event: AstrMessageEvent, keyword: str = ""):
+    async def handle_lyric_search(self, event: AstrMessageEvent):
         """搜索歌曲并从第一句开始
         
         用法：/接歌词 search 歌曲名
-        例如：/接歌词 search 晴天
+        例如：/接歌词 search I LOVE U
         """
         user_id = event.unified_msg_origin
-        message = keyword.strip()
         
-        logger.debug(f"收到搜索指令，关键词: '{message}', 用户: {user_id}")
+        # 手动解析消息，提取search后的所有内容
+        full_message = event.message_str.strip()
         
-        if not message:
-            yield event.plain_result(self.config.get('msg_empty_keyword', '请提供歌曲名或歌词片段，例如：/接歌词 search 晴天'))
+        # 移除指令前缀（如 / ! 等）
+        trigger_prefixes = ['/', '!', '。', '！', '？', '?']
+        for prefix in trigger_prefixes:
+            if full_message.startswith(prefix):
+                full_message = full_message[1:].strip()
+                break
+        
+        # 移除"接歌词 search"部分，保留歌曲名
+        # 匹配可能的格式：接歌词 search、接歌词search、接歌词 search 
+        search_pattern = r'^接歌词\s*search\s+'
+        match = re.match(search_pattern, full_message, re.IGNORECASE)
+        
+        if not match:
+            # 如果没有匹配到，尝试其他可能的格式
+            yield event.plain_result(self.config.get('msg_empty_keyword', '请提供歌曲名，例如：/接歌词 search I LOVE U'))
             return
         
-        logger.info(f"搜索关键词: '{message}'")
+        # 提取歌曲名（search后的所有内容）
+        keyword = full_message[match.end():].strip()
+        
+        logger.debug(f"收到搜索指令，完整消息: '{event.message_str}', 解析后关键词: '{keyword}', 用户: {user_id}")
+        
+        if not keyword:
+            yield event.plain_result(self.config.get('msg_empty_keyword', '请提供歌曲名，例如：/接歌词 search I LOVE U'))
+            return
+        
+        logger.info(f"搜索关键词: '{keyword}'")
         
         # 搜索歌曲
         try:
             session = self.game.get_session(user_id)
-            logger.debug(f"调用API搜索，关键词: '{message}', 限制: {self.game.search_limit}")
-            songs = await self.game.api.search_songs(message, limit=self.game.search_limit)
+            logger.debug(f"调用API搜索，关键词: '{keyword}', 限制: {self.game.search_limit}")
+            songs = await self.game.api.search_songs(keyword, limit=self.game.search_limit)
             
             if not songs:
                 yield event.plain_result(self.config.get('msg_no_songs_found', '未找到相关歌曲，请尝试其他关键词'))
@@ -773,7 +792,7 @@ class LyricGamePlugin(Star):
             yield event.plain_result(self.config.get('msg_search_failed', '搜索失败，请重试'))
     
     @lyric_game_group.command("from")
-    async def handle_lyric_start_from(self, event: AstrMessageEvent, song_keyword: str = "", lyric_keyword: str = ""):
+    async def handle_lyric_start_from(self, event: AstrMessageEvent):
         """从指定歌词开始游戏
         
         用法：/接歌词 from 歌曲名 歌词关键词
@@ -781,12 +800,38 @@ class LyricGamePlugin(Star):
         """
         user_id = event.unified_msg_origin
         
-        logger.debug(f"收到from指令，歌曲: '{song_keyword}', 歌词: '{lyric_keyword}', 用户: {user_id}")
+        # 手动解析消息，提取from后的所有内容
+        full_message = event.message_str.strip()
         
-        if not song_keyword or not lyric_keyword:
+        # 移除指令前缀（如 / ! 等）
+        trigger_prefixes = ['/', '!', '。', '！', '？', '?']
+        for prefix in trigger_prefixes:
+            if full_message.startswith(prefix):
+                full_message = full_message[1:].strip()
+                break
+        
+        # 移除"接歌词 from"部分
+        from_pattern = r'^接歌词\s*from\s+'
+        match = re.match(from_pattern, full_message, re.IGNORECASE)
+        
+        if not match:
             yield event.plain_result("请提供歌曲名和歌词关键词，例如：/接歌词 from 晴天 从前从前")
             return
         
+        # 提取from后的内容，并分割成歌曲名和歌词关键词
+        remaining = full_message[match.end():].strip()
+        
+        # 使用空格分隔，第一个词是歌曲名，剩余是歌词
+        parts = remaining.split(None, 1)
+        
+        if len(parts) < 2:
+            yield event.plain_result("请同时提供歌曲名和歌词关键词，例如：/接歌词 from 晴天 从前从前")
+            return
+        
+        song_keyword = parts[0]
+        lyric_keyword = parts[1]
+        
+        logger.debug(f"收到from指令，完整消息: '{event.message_str}', 歌曲: '{song_keyword}', 歌词: '{lyric_keyword}', 用户: {user_id}")
         logger.info(f"搜索歌曲: '{song_keyword}', 歌词关键词: '{lyric_keyword}'")
         
         try:
@@ -988,14 +1033,9 @@ class LyricGamePlugin(Star):
             
             if response:
                 # 匹配成功或失败，发送回复
-                logger.info(f"用户 {user_id} 接歌词返回: '{response}', in_song={session.in_song}")
+                logger.info(f"用户 {user_id} 接歌词返回: '{response}'")
                 event.stop_event()  # 阻止LLM回复
                 yield event.plain_result(response)
-                
-                # 如果游戏已结束（in_song为False），清理active_sessions
-                if not session.in_song:
-                    logger.info(f"用户 {user_id} 游戏已结束，清理active_sessions")
-                    self.active_sessions.discard(user_id)
             else:
                 # response为None，说明不在游戏中或出现意外情况
                 logger.warning(f"用户 {user_id} 接歌词返回None，可能不在游戏中")
