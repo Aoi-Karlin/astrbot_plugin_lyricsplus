@@ -9,7 +9,6 @@ import time
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
-from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.star import Star, register, Context, StarTools
 from astrbot.api.event import filter, AstrMessageEvent
@@ -1005,38 +1004,41 @@ class LyricGamePlugin(Star):
             # 发生错误时退出接歌词模式
             self.active_sessions.discard(user_id)
 
-    @filter.command("清除歌词缓存")
-    async def clear_lyric_cache(self, event: AstrMessageEvent, song_id: str = None):
-        """
-        清除歌词缓存。
-        用法：
-        1. /清除歌词缓存  -> 清除当前正在游玩/选择的歌曲缓存
-        2. /清除歌词缓存 2715181994 -> 清除指定ID的歌曲缓存
-        """
-        target_id = song_id
-        target_name = "未知歌曲"
+        @filter.command("清除歌词缓存")
+        async def clear_cache_cmd(self, event: AstrMessageEvent, song_id: str = None):
+            """清除缓存并重置状态"""
+            # 手动停止事件，确保不会触发 on_message 里的歌词匹配失败
+            event.stop_event()
 
-        # 如果用户没有提供ID，尝试获取当前会话中的歌曲ID
-        if not target_id:
             user_id = event.get_sender_id()
             session = self.game.get_session(user_id)
-            if session and session.current_song:
-                target_id = str(session.current_song.get('id'))
-                target_name = session.current_song.get('name', '当前歌曲')
-                # 清除缓存时，最好也把当前卡住的会话重置
-                self.game.active_sessions.discard(user_id)
-            else:
-                yield event.plain_result("⚠️ 未指定歌曲ID，且当前没有正在进行的歌曲。\n请使用：/清除歌词缓存 <歌曲ID>")
+
+            # 1. 尝试使用 current_song，如果未定义则使用参数
+            target_id = song_id
+            if not target_id and session.current_song:
+                target_id = session.current_song.get('id')
+
+            if not target_id:
+                yield event.plain_result("⚠️ 未找到正在进行的歌曲 ID，请手动输入 ID：/清除歌词缓存 <ID>")
                 return
 
-        # 执行清除操作
-        key = f"lyrics_{target_id}"
+            await self.delete_kv_data(f"lyrics_{target_id}")
+            session.reset()
+            self.game.active_sessions.discard(user_id)
+            yield event.plain_result(f"✅ 已清除 ID {target_id} 的缓存并退出会话。")
 
-        # 尝试获取一下看是否存在
-        exists = await self.get_kv_data(key, None)
+        @filter.on_message()
+        async def on_message(self, event: AstrMessageEvent):
+            user_id = event.get_sender_id()
+            if user_id not in self.game.active_sessions: return
 
-        if exists:
-            await self.delete_kv_data(key)
-            yield event.plain_result(f"✅ 已成功清除《{target_name}》(ID: {target_id}) 的缓存。\n请重新搜索并点歌。")
-        else:
-            yield event.plain_result(f"⚠️ 未找到 ID 为 {target_id} 的缓存数据，可能未缓存或ID错误。")
+            raw_message = event.get_result().get_plain_text().strip()
+            if not raw_message: return
+
+            # 2. 核心改进：根据配置的前缀列表判断是否为指令
+            prefixes = self.context.config.get("command_prefixes", ["/", "!", "?", "。", "#"])
+            if any(raw_message.startswith(p) for p in prefixes):
+                logger.debug(f"检测到指令前缀，跳过歌词匹配: {raw_message}")
+                return
+
+            session = self.game.get_session(user_id)
