@@ -1004,3 +1004,39 @@ class LyricGamePlugin(Star):
             yield event.plain_result("处理出错，已退出接歌词模式")
             # 发生错误时退出接歌词模式
             self.active_sessions.discard(user_id)
+
+    @filter.command("清除歌词缓存")
+    async def clear_lyric_cache(self, event: AstrMessageEvent, song_id: str = None):
+        """
+        清除歌词缓存。
+        用法：
+        1. /清除歌词缓存  -> 清除当前正在游玩/选择的歌曲缓存
+        2. /清除歌词缓存 2715181994 -> 清除指定ID的歌曲缓存
+        """
+        target_id = song_id
+        target_name = "未知歌曲"
+
+        # 如果用户没有提供ID，尝试获取当前会话中的歌曲ID
+        if not target_id:
+            user_id = event.get_sender_id()
+            session = self.game.get_session(user_id)
+            if session and session.current_song:
+                target_id = str(session.current_song.get('id'))
+                target_name = session.current_song.get('name', '当前歌曲')
+                # 清除缓存时，最好也把当前卡住的会话重置
+                self.game.active_sessions.discard(user_id)
+            else:
+                yield event.plain_result("⚠️ 未指定歌曲ID，且当前没有正在进行的歌曲。\n请使用：/清除歌词缓存 <歌曲ID>")
+                return
+
+        # 执行清除操作
+        key = f"lyrics_{target_id}"
+
+        # 尝试获取一下看是否存在
+        exists = await self.get_kv_data(key, None)
+
+        if exists:
+            await self.delete_kv_data(key)
+            yield event.plain_result(f"✅ 已成功清除《{target_name}》(ID: {target_id}) 的缓存。\n请重新搜索并点歌。")
+        else:
+            yield event.plain_result(f"⚠️ 未找到 ID 为 {target_id} 的缓存数据，可能未缓存或ID错误。")
