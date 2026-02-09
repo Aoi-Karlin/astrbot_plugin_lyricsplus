@@ -266,44 +266,33 @@ class NeteaseAPI:
 
     def _is_metadata_line(self, text: str) -> bool:
         """
-        判断是否为元数据行（如作词、作曲、编曲等信息）
-
-        Args:
-            text: 歌词文本
-
-        Returns:
-            是否为元数据行
+        判断是否为元数据行 - 最终增强版
         """
         if not text:
             return False
 
-        # 1. 快速检查是否包含冒号（无冒号通常不是元数据行，提高效率）
-        if ':' not in text and '：' not in text:
+        # 1. 剥离可能残留的时间轴
+        text_content = re.sub(r'^\[.*?\]', '', text)
+        if not text_content.strip():
             return False
 
-        # 2. 归一化处理
-        # 将全角冒号替换为半角，统一标准
-        normalized_text = text.replace('：', ':')
+        # 2. 预处理：统一全角冒号，移除所有空白，转小写
+        # 兼容 ASCII冒号(:), 全角冒号(：)
+        normalized = text_content.replace('：', ':')
+        cleaned = re.sub(r'\s+', '', normalized).lower()
 
-        # 去除所有空白字符（空格、制表符等），并将文本转为小写以便忽略大小写差异
-        # 这样 "作 词 : xxx" 会变成 "作词:xxx"
-        cleaned_text = re.sub(r'\s+', '', normalized_text).lower()
-
-        # 3. 遍历关键词进行匹配
+        # 3. 匹配关键词
         for keyword in self.metadata_keywords:
-            # 同样清洗关键词（去除空格，转小写）
+            # 同样清洗关键词
             clean_kw = re.sub(r'\s+', '', keyword).lower()
 
-            # 检查：清洗后的文本是否以 "关键词:" 开头
-            # 逻辑：如果歌词是 "作词 : 单身汪"，清洗后为 "作词:单身汪"
-            # 关键词 "作词" 清洗后为 "作词"，加上冒号为 "作词:"
-            # 匹配成功
-            if cleaned_text.startswith(f"{clean_kw}:"):
+            # 检查是否以 "关键词:" 开头
+            if cleaned.startswith(f"{clean_kw}:"):
                 return True
 
         return False
 
-
+    
 class LyricGameSession:
     """歌词游戏会话"""
     
